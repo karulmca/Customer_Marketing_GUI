@@ -1,0 +1,65 @@
+# Environment and Configuration Files
+config.json
+.env
+*.env
+
+# Logs
+*.log
+logs/
+
+# Results and Test Data
+results/
+test_data/*.xlsx
+test_data/*.csv
+!test_data/sample_companies.csv
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database
+*.db
+*.sqlite
+
+# Temporary files
+*.tmp
+*.temp
+*~
+
+# Backup files
+*.backup
+*.bak
