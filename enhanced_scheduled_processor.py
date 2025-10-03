@@ -167,6 +167,8 @@ class LinkedInDataProcessor:
                     inserted_count = self.insert_company_data(processed_df, file_upload_id)
                     logger.info(f"✅ Stage 4 Complete - Inserted {inserted_count} records into database")
                     
+                    # Note: Job status updates are handled by the calling EnhancedScheduledProcessor
+                    
                     # Final success status
                     if progress_callback:
                         progress_callback(file_upload_id, "Completed Successfully", 4, 4)
@@ -474,7 +476,7 @@ class LinkedInDataProcessor:
     def get_file_upload_info(self, file_upload_id: int) -> Optional[Dict]:
         """Get file upload information"""
         try:
-            query = f"SELECT file_name, uploaded_by FROM file_upload WHERE id = {file_upload_id}"
+            query = f"SELECT file_name, uploaded_by FROM file_upload WHERE id = '{file_upload_id}'"
             result = self.db_connection.query_to_dataframe(query)
             
             if result is not None and not result.empty:
@@ -498,6 +500,72 @@ class EnhancedScheduledProcessor:
             
         self.file_processor = FileUploadProcessor()
         self.data_processor = LinkedInDataProcessor()
+    
+    def process_pending_job(self, job_id: int, scraper_type: str = "complete") -> bool:
+        """Process a specific pending job by job ID for auto-start functionality"""
+        try:
+            logger.info(f"🚀 Auto-starting processing job ID: {job_id}")
+            
+            # Get job details
+            job_query = """
+                SELECT pj.id, pj.file_upload_id, pj.job_status, fu.file_name, fu.raw_data::text as raw_data
+                FROM processing_jobs pj
+                JOIN file_upload fu ON pj.file_upload_id = fu.id
+                WHERE pj.id = %s AND pj.job_status = 'queued'
+            """
+            
+            import pandas as pd
+            with self.db_connection.manager.engine.connect() as conn:
+                job_result = pd.read_sql_query(job_query, conn, params=(job_id,))
+            
+            if job_result.empty:
+                logger.warning(f"No pending job found with ID: {job_id}")
+                return False
+            
+            job_row = job_result.iloc[0]
+            file_upload_id = job_row['file_upload_id']  # Get UUID string directly
+            file_name = job_row['file_name']
+            raw_data_str = job_row['raw_data']
+            
+            logger.info(f"📋 Processing file: {file_name} (Upload ID: {file_upload_id})")
+            
+            # Update job status to 'started'
+            self.update_job_status(file_upload_id, 'started')
+            
+            # Update to 'processing'
+            self.update_file_status(file_upload_id, 'processing', 'Auto-started processing with LinkedIn scraping...')
+            self.update_job_status(file_upload_id, 'processing', progress_info="LinkedIn scraping initiated automatically")
+            
+            # Parse JSON data
+            if isinstance(raw_data_str, str):
+                json_data = json.loads(raw_data_str)
+            elif isinstance(raw_data_str, dict):
+                json_data = raw_data_str
+            else:
+                logger.error(f"Unexpected raw_data type: {type(raw_data_str)}")
+                return False
+            
+            # Process the data
+            success = self.data_processor.process_json_data(json_data, file_upload_id, scraper_type)
+            
+            if success:
+                # Update job status to completed
+                self.update_job_status(file_upload_id, 'completed', progress_info="All processing stages completed successfully")
+                self.update_file_status(file_upload_id, 'completed', f'Auto-processing completed successfully with LinkedIn scraping.')
+                logger.info(f"✅ Auto-processing completed successfully for job {job_id}")
+                return True
+            else:
+                # Update job status to error
+                self.update_job_status(file_upload_id, 'error', error_message="LinkedIn scraping failed")
+                self.update_file_status(file_upload_id, 'error', 'Auto-processing failed during LinkedIn scraping.')
+                logger.error(f"❌ Auto-processing failed for job {job_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Error in process_pending_job: {str(e)}")
+            self.update_job_status(file_upload_id if 'file_upload_id' in locals() else 0, 'error', 
+                                 error_message=f"Auto-processing error: {str(e)}")
+            return False
     
     def process_pending_files(self, scraper_type: str = "complete") -> int:
         """Process all pending files using LinkedIn scraper logic"""

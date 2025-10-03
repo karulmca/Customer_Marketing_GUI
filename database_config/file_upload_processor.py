@@ -39,7 +39,7 @@ class FileUploadProcessor:
             print(f"Error calculating file hash: {e}")
             return ""
     
-    def upload_file_as_json(self, file_path: str, uploaded_by: str = "GUI_User") -> Optional[int]:
+    def upload_file_as_json(self, file_path: str, uploaded_by: str = "GUI_User") -> Optional[str]:
         """
         Upload file content as JSON to file_upload table
         Returns file_upload_id if successful, None if failed
@@ -118,7 +118,7 @@ class FileUploadProcessor:
                 'file_name': file_name,
                 'file_path': file_path,
                 'file_size': file_size,
-                'original_columns': list(df.columns),
+                'original_columns': json.dumps(list(df.columns)),
                 'raw_data': json.dumps(raw_data),
                 'uploaded_by': uploaded_by,
                 'processing_status': 'pending',
@@ -150,7 +150,7 @@ class FileUploadProcessor:
             print(f"❌ Error uploading file: {str(e)}")
             return None
     
-    def check_duplicate_file(self, file_hash: str) -> Optional[int]:
+    def check_duplicate_file(self, file_hash: str) -> Optional[str]:
         """Check if file with same hash already exists"""
         try:
             if not self.db_connection:
@@ -160,14 +160,14 @@ class FileUploadProcessor:
             result = self.db_connection.query_to_dataframe(query)
             
             if result is not None and not result.empty:
-                return int(result.iloc[0]['id'])
+                return result.iloc[0]['id']
             return None
             
         except Exception as e:
             print(f"Error checking duplicate file: {e}")
             return None
     
-    def get_latest_upload_id(self, file_hash: str) -> Optional[int]:
+    def get_latest_upload_id(self, file_hash: str) -> Optional[str]:
         """Get the ID of the latest uploaded file"""
         try:
             if not self.db_connection:
@@ -182,14 +182,14 @@ class FileUploadProcessor:
             result = self.db_connection.query_to_dataframe(query)
             
             if result is not None and not result.empty:
-                return int(result.iloc[0]['id'])
+                return result.iloc[0]['id']
             return None
             
         except Exception as e:
             print(f"Error getting latest upload ID: {e}")
             return None
     
-    def create_processing_job(self, file_upload_id: int, job_type: str = "data_extraction") -> bool:
+    def create_processing_job(self, file_upload_id: str, job_type: str = "data_extraction") -> bool:
         """Create a processing job for the uploaded file"""
         try:
             if not self.db_connection:

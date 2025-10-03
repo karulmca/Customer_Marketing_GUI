@@ -2,6 +2,7 @@
 """
 File Upload GUI with PostgreSQL Backend - JSON Storage Approach
 Uploads files as JSON data for later scheduled processing
+Now with integrated authentication support
 """
 
 import tkinter as tk
@@ -12,6 +13,9 @@ import sys
 from datetime import datetime
 import threading
 import json
+import argparse
+import tempfile
+import time
 
 # Add database_config to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -28,10 +32,67 @@ except ImportError as e:
     print(f"⚠️  Database dependencies not available: {e}")
     DATABASE_AVAILABLE = False
 
+class ToolTip:
+    """Create a tooltip for a given widget"""
+    def __init__(self, widget, text='widget info'):
+        self.widget = widget
+        self.text = text
+        self.widget.bind("<Enter>", self.enter)
+        self.widget.bind("<Leave>", self.leave)
+        self.tipwindow = None
+        
+    def enter(self, event=None):
+        self.showtip()
+        
+    def leave(self, event=None):
+        self.hidetip()
+        
+    def showtip(self):
+        if self.tipwindow or not self.text:
+            return
+        try:
+            x, y, cx, cy = self.widget.bbox("insert")
+        except:
+            # Fallback if bbox fails
+            x = y = cx = cy = 0
+        x = x + self.widget.winfo_rootx() + 25
+        y = y + cy + self.widget.winfo_rooty() + 25
+        
+        self.tipwindow = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        
+        # Enhanced styling for tooltip
+        label = tk.Label(tw, text=self.text, justify=tk.LEFT,
+                        background="#f8f9fa", relief=tk.SOLID, borderwidth=1,
+                        font=("Arial", 10, "normal"), wraplength=450,
+                        padx=8, pady=6, foreground="#333333")
+        label.pack()
+        
+        # Add slight shadow effect (Windows-like)
+        tw.attributes('-alpha', 0.95)
+        
+    def hidetip(self):
+        tw = self.tipwindow
+        self.tipwindow = None
+        if tw:
+            tw.destroy()
+
 class FileUploadJSONGUI:
-    def __init__(self, root):
+    def __init__(self, root, session_file_path=None):
         self.root = root
-        self.root.title("File Upload & PostgreSQL Manager - JSON Storage")
+        self.session_file_path = session_file_path
+        self.session_data = None
+        self.user_info = None
+        
+        # Load authentication session if provided
+        self.load_session()
+        
+        # Set window title with user info
+        title = "File Upload & PostgreSQL Manager - JSON Storage"
+        if self.user_info:
+            title += f" - Welcome {self.user_info['username']}"
+        self.root.title(title)
         self.root.geometry("1250x850")
         
         # Force window to be visible and on top initially
@@ -40,6 +101,9 @@ class FileUploadJSONGUI:
         self.root.focus_force()
         # Remove topmost after 3 seconds
         self.root.after(3000, lambda: self.root.attributes('-topmost', False))
+        
+        # Handle window closing
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         # Variables
         self.uploaded_file_path = tk.StringVar()
@@ -54,6 +118,10 @@ class FileUploadJSONGUI:
         self.init_database()
         
         self.create_widgets()
+        
+        # Start session validation if authenticated
+        if self.session_data:
+            self.start_session_monitoring()
         
     def init_database(self):
         """Initialize PostgreSQL database connection"""
@@ -103,6 +171,10 @@ class FileUploadJSONGUI:
             return "❌ Error"
     
     def create_widgets(self):
+        # User info header (only show if authenticated)
+        if self.user_info:
+            self.create_user_info_header()
+        
         # Main container with notebook (tabs)
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -137,29 +209,139 @@ class FileUploadJSONGUI:
         self.create_jobs_tab(jobs_frame)
         self.create_stats_tab(stats_frame)
         self.create_settings_tab(settings_frame)
+    
+    def create_user_info_header(self):
+        """Create user information header with username and logout button"""
+        # User info frame at the top
+        user_frame = ttk.Frame(self.root)
+        user_frame.pack(fill=tk.X, padx=10, pady=(10, 0))
+        
+        # Left side - User information
+        user_info_frame = ttk.Frame(user_frame)
+        user_info_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        # User icon and info
+        username = self.user_info.get('username', 'Unknown')
+        user_role = self.user_info.get('role', 'user')
+        user_email = self.user_info.get('email', '')
+        
+        # Role icon based on user role
+        role_icon = "👑" if user_role == "admin" else "👤"
+        
+        # User info label
+        user_text = f"{role_icon} Logged in as: {username}"
+        if user_role == "admin":
+            user_text += " (Administrator)"
+        if user_email:
+            user_text += f" • {user_email}"
+            
+        self.user_info_label = ttk.Label(user_info_frame, text=user_text, 
+                                        font=('Arial', 10, 'bold'),
+                                        foreground='#2c5530')
+        self.user_info_label.pack(side=tk.LEFT, padx=(10, 0), pady=5)
+        
+        # Right side - Logout button and session info
+        logout_frame = ttk.Frame(user_frame)
+        logout_frame.pack(side=tk.RIGHT)
+        
+        # Session time info
+        if self.session_data and self.session_data.get('login_time'):
+            login_time = self.session_data.get('login_time', '')
+            # Extract just the time part if it's in ISO format
+            if 'T' in login_time:
+                time_part = login_time.split('T')[1].split('.')[0]  # Get HH:MM:SS
+                session_text = f"Session: {time_part}"
+            else:
+                session_text = f"Session: {login_time}"
+            
+            session_label = ttk.Label(logout_frame, text=session_text, 
+                                    font=('Arial', 9),
+                                    foreground='#666666')
+            session_label.pack(side=tk.LEFT, padx=(0, 10), pady=5)
+        
+        # Logout button
+        logout_btn = ttk.Button(logout_frame, text="🚪 Logout", 
+                               command=self.logout_user,
+                               width=12)
+        logout_btn.pack(side=tk.RIGHT, padx=(0, 10), pady=5)
+        
+        # Separator line
+        separator = ttk.Separator(self.root, orient='horizontal')
+        separator.pack(fill=tk.X, padx=10, pady=(5, 0))
+        
+    def logout_user(self):
+        """Handle user logout"""
+        username = self.user_info.get('username', 'User')
+        if messagebox.askyesno("Logout", f"Are you sure you want to logout, {username}?\n\nThis will close the application and end your session."):
+            # Show logout message
+            messagebox.showinfo("Logged Out", f"Goodbye {username}! You have been successfully logged out.")
+            # Clean up and exit
+            self.cleanup_and_exit()
+    
+    def update_user_info_display(self):
+        """Update the user info display with current session status"""
+        if hasattr(self, 'user_info_label') and self.user_info:
+            username = self.user_info.get('username', 'Unknown')
+            user_role = self.user_info.get('role', 'user')
+            user_email = self.user_info.get('email', '')
+            
+            # Role icon based on user role
+            role_icon = "👑" if user_role == "admin" else "👤"
+            
+            # Build user info text
+            user_text = f"{role_icon} Logged in as: {username}"
+            if user_role == "admin":
+                user_text += " (Administrator)"
+            if user_email:
+                user_text += f" • {user_email}"
+                
+            # Add session status indicator
+            if self.session_data:
+                user_text += " • 🟢 Active Session"
+            else:
+                user_text += " • 🔴 No Session"
+            
+            self.user_info_label.config(text=user_text)
         
     def create_upload_tab(self, parent):
         # Main container
         main_frame = ttk.Frame(parent, padding="15")
         main_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Title
-        title_label = ttk.Label(main_frame, text="📁 File Upload - JSON Storage for Scheduled Processing", 
+        # Title with info icon
+        title_frame = ttk.Frame(main_frame)
+        title_frame.pack(fill=tk.X, pady=(0, 20))
+        
+        title_label = ttk.Label(title_frame, text="📁 File Upload - JSON Storage for Scheduled Processing", 
                                font=('Arial', 16, 'bold'))
-        title_label.pack(pady=(0, 20))
+        title_label.pack(side=tk.LEFT)
         
-        # Info frame
-        info_frame = ttk.LabelFrame(main_frame, text="ℹ️ How It Works", padding="10")
-        info_frame.pack(fill=tk.X, pady=(0, 15))
+        # Info icon with tooltip
+        info_icon = ttk.Label(title_frame, text=" ℹ️", font=('Arial', 16), 
+                             cursor="question_arrow", foreground="#007ACC")
+        info_icon.pack(side=tk.LEFT, padx=(10, 0))
         
-        info_text = """🔄 New Processing Workflow:
-1. Upload Excel/CSV files → Stored as JSON in 'file_upload' table
-2. Files remain in 'pending' status until processed
-3. Scheduled jobs process the JSON data → Extract to 'company_data' table
-4. Monitor processing status and manage jobs through GUI tabs"""
+        # Add hover effects
+        def on_enter(e):
+            info_icon.configure(foreground="#0056b3")
+        def on_leave(e):
+            info_icon.configure(foreground="#007ACC")
         
-        info_label = ttk.Label(info_frame, text=info_text, justify=tk.LEFT)
-        info_label.pack(anchor=tk.W)
+        info_icon.bind("<Enter>", on_enter)
+        info_icon.bind("<Leave>", on_leave)
+        
+        # Create tooltip for info icon
+        info_text = """🔄 How It Works:
+
+1. 📤 Upload Excel/CSV files → Stored as JSON in 'file_upload' table
+2. ⏸️ Files remain in 'pending' status until processed  
+3. ⚙️ Scheduled jobs process the JSON data → Extract to 'company_data' table
+4. 📊 Monitor processing status and manage jobs through GUI tabs
+
+💡 This workflow allows for better job management and processing control.
+🚀 Auto-processing can be enabled in the Settings tab."""
+        
+        self.create_tooltip(info_icon, info_text)
         
         # Database status frame
         status_frame = ttk.LabelFrame(main_frame, text="Database Status", padding="10")
@@ -232,6 +414,10 @@ class FileUploadJSONGUI:
         
         self.preview_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         preview_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    
+    def create_tooltip(self, widget, text):
+        """Create a tooltip for the given widget"""
+        ToolTip(widget, text)
         
     def create_files_tab(self, parent):
         # Main container
@@ -555,7 +741,13 @@ class FileUploadJSONGUI:
         """Worker thread for JSON upload"""
         try:
             file_path = self.uploaded_file_path.get()
-            file_upload_id = self.file_processor.upload_file_as_json(file_path, "GUI_User")
+            
+            # Use authenticated user or default
+            uploaded_by = "GUI_User"
+            if self.user_info and self.user_info.get('username'):
+                uploaded_by = self.user_info['username']
+            
+            file_upload_id = self.file_processor.upload_file_as_json(file_path, uploaded_by)
             
             if file_upload_id:
                 self.root.after(0, lambda: self._upload_json_completed(file_upload_id))
@@ -569,13 +761,37 @@ class FileUploadJSONGUI:
         """Handle successful JSON upload completion"""
         self.is_processing = False
         self.status_var.set(f"✅ File uploaded as JSON (ID: {file_upload_id})")
-        messagebox.showinfo("Success", 
-                           f"File uploaded successfully as JSON!\n\n"
-                           f"Upload ID: {file_upload_id}\n"
-                           f"Status: Pending processing\n\n"
-                           f"The file will be processed by scheduled jobs.")
+        
+        # Check if auto-start is enabled (default to True if not set)
+        auto_start_enabled = getattr(self, 'auto_start_var', tk.BooleanVar(value=True)).get()
+        
+        if auto_start_enabled:
+            # Auto-start processing
+            auto_start_success = self.auto_start_processing(file_upload_id)
+            
+            if auto_start_success:
+                messagebox.showinfo("Success", 
+                                   f"File uploaded and processing started!\n\n"
+                                   f"Upload ID: {file_upload_id}\n"
+                                   f"Status: Processing started automatically\n\n"
+                                   f"Processing with 10-20 second timing for optimal success.\n"
+                                   f"Monitor progress in the Processing Jobs tab.")
+            else:
+                messagebox.showinfo("Upload Success", 
+                                   f"File uploaded successfully as JSON!\n\n"
+                                   f"Upload ID: {file_upload_id}\n"
+                                   f"Status: Pending processing\n\n"
+                                   f"Auto-start failed - please manually start in Processing Jobs tab.")
+        else:
+            messagebox.showinfo("Upload Success", 
+                               f"File uploaded successfully as JSON!\n\n"
+                               f"Upload ID: {file_upload_id}\n"
+                               f"Status: Pending processing\n\n"
+                               f"Auto-processing is disabled. Go to Processing Jobs tab to start manually.")
+        
         self.refresh_files_view()
         self.refresh_stats()
+        self.refresh_jobs_view()  # Refresh jobs to show the started job
         
     def _upload_json_failed(self, error):
         """Handle JSON upload failure"""
@@ -609,8 +825,14 @@ class FileUploadJSONGUI:
         """Worker thread for upload and immediate processing"""
         try:
             file_path = self.uploaded_file_path.get()
+            
+            # Use authenticated user or default
+            uploaded_by = "GUI_User"
+            if self.user_info and self.user_info.get('username'):
+                uploaded_by = self.user_info['username']
+            
             # First upload as JSON
-            file_upload_id = self.file_processor.upload_file_as_json(file_path, "GUI_User")
+            file_upload_id = self.file_processor.upload_file_as_json(file_path, uploaded_by)
             
             if file_upload_id:
                 # Then immediately process it
@@ -643,6 +865,65 @@ class FileUploadJSONGUI:
         self.is_processing = False
         self.status_var.set("❌ Upload/processing failed")
         messagebox.showerror("Processing Failed", f"Failed to upload and process file: {error}")
+    
+    def auto_start_processing(self, file_upload_id):
+        """Automatically start processing for the uploaded file"""
+        try:
+            if not DATABASE_AVAILABLE:
+                return False
+                
+            # Import the enhanced processor
+            import sys
+            import os
+            sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from enhanced_scheduled_processor import EnhancedScheduledProcessor
+            
+            processor = EnhancedScheduledProcessor()
+            
+            # Check if there's a pending job for this file
+            jobs_query = """
+                SELECT id, job_status FROM processing_jobs 
+                WHERE file_upload_id = %s AND job_status = 'queued'
+                ORDER BY created_at DESC LIMIT 1
+            """
+            
+            # Execute query to find pending job
+            import pandas as pd
+            try:
+                # Use a parameterized query with proper format
+                formatted_query = f"""
+                SELECT id, job_status FROM processing_jobs 
+                WHERE file_upload_id = '{file_upload_id}' AND job_status = 'queued'
+                ORDER BY scheduled_at DESC LIMIT 1
+                """
+                result = processor.db_connection.query_to_dataframe(formatted_query)
+                    
+                if result.empty:
+                    return False
+                    
+                job_id = result.iloc[0]['id']  # Get UUID string directly
+                
+                # Start processing in a separate thread to avoid blocking GUI
+                import threading
+                
+                def start_processing_thread():
+                    try:
+                        processor.process_pending_job(job_id)
+                    except Exception as e:
+                        print(f"Error in auto-processing: {e}")
+                
+                processing_thread = threading.Thread(target=start_processing_thread, daemon=True)
+                processing_thread.start()
+                
+                return True
+                
+            except Exception as e:
+                print(f"Database error in auto_start_processing: {e}")
+                return False
+                
+        except Exception as e:
+            print(f"Error in auto_start_processing: {e}")
+            return False
         
     def clear_upload(self):
         """Clear upload form"""
@@ -717,7 +998,7 @@ class FileUploadJSONGUI:
                                fu.file_name, cd.file_upload_id
                         FROM company_data cd
                         LEFT JOIN file_upload fu ON cd.file_upload_id = fu.id
-                        WHERE cd.file_upload_id = {int(file_id)}
+                        WHERE cd.file_upload_id = '{file_id}'
                         ORDER BY cd.upload_date DESC
                     """
                     df = self.db_connection.query_to_dataframe(query)
@@ -1070,6 +1351,9 @@ class FileUploadJSONGUI:
             stats_text.delete(1.0, tk.END)
             
             # Get enhanced statistics
+            import sys
+            import os
+            sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             from enhanced_scheduled_processor import EnhancedScheduledProcessor
             processor = EnhancedScheduledProcessor()
             
@@ -1187,7 +1471,7 @@ class FileUploadJSONGUI:
                 
             for item in selected_items:
                 record_id = self.data_tree.item(item)['values'][0]
-                query = f"DELETE FROM company_data WHERE id = {record_id}"
+                query = f"DELETE FROM company_data WHERE id = '{record_id}'"
                 self.db_connection.query_to_dataframe(query)
                 
             messagebox.showinfo("Success", f"Deleted {len(selected_items)} records")
@@ -1283,6 +1567,21 @@ class FileUploadJSONGUI:
         timing_info = ttk.Label(controls_frame, text="💡 Recommended: 10-20 seconds for optimal success rate", 
                               foreground="green", font=('Arial', 9))
         timing_info.grid(row=2, column=0, columnspan=4, sticky=tk.W, pady=(10, 0))
+        
+        # Auto-Processing Settings Section
+        auto_frame = ttk.LabelFrame(main_frame, text="🚀 Auto-Processing Settings", padding="15")
+        auto_frame.pack(fill=tk.X, pady=(0, 20))
+        
+        # Auto-start checkbox
+        self.auto_start_var = tk.BooleanVar(value=True)  # Default to enabled
+        auto_start_cb = ttk.Checkbutton(auto_frame, text="🔥 Auto-start processing after file upload", 
+                                       variable=self.auto_start_var)
+        auto_start_cb.pack(anchor=tk.W, pady=(0, 10))
+        
+        auto_info = ttk.Label(auto_frame, text="💡 When enabled, LinkedIn scraping starts automatically after file upload\n"
+                                              "When disabled, you must manually start processing in the Processing Jobs tab", 
+                            foreground="blue", font=('Arial', 9), justify=tk.LEFT)
+        auto_info.pack(anchor=tk.W)
         
         # API Settings Section
         api_frame = ttk.LabelFrame(main_frame, text="🔑 OpenAI API Configuration", padding="15")
@@ -1384,6 +1683,10 @@ class FileUploadJSONGUI:
             self.min_delay_var.set(delay_range[0])
             self.max_delay_var.set(delay_range[1])
             
+            # Update auto-start setting
+            auto_start = self.current_config.get('gui_settings', {}).get('auto_start_processing', True)
+            self.auto_start_var.set(auto_start)
+            
             # Update API key status
             api_key = self.current_config.get('openai_settings', {}).get('api_key', '')
             if api_key and len(api_key) > 10:
@@ -1432,6 +1735,11 @@ class FileUploadJSONGUI:
             # Update config
             self.current_config['scraper_settings']['delay_range'] = [min_delay, max_delay]
             
+            # Handle auto-start setting
+            if 'gui_settings' not in self.current_config:
+                self.current_config['gui_settings'] = {}
+            self.current_config['gui_settings']['auto_start_processing'] = self.auto_start_var.get()
+            
             # Handle OpenAI settings
             if 'openai_settings' not in self.current_config:
                 self.current_config['openai_settings'] = {}
@@ -1456,9 +1764,128 @@ class FileUploadJSONGUI:
             error_msg = f"❌ Error saving settings: {str(e)}"
             self.settings_status_label.config(text=error_msg, foreground="red")
             messagebox.showerror("Save Error", error_msg)
+    
+    def load_session(self):
+        """Load authentication session from file."""
+        if not self.session_file_path or not os.path.exists(self.session_file_path):
+            return
+        
+        try:
+            with open(self.session_file_path, 'r') as f:
+                self.session_data = json.load(f)
+                self.user_info = self.session_data.get('user_info', {})
+                print(f"✅ Session loaded for user: {self.user_info.get('username', 'Unknown')}")
+        except Exception as e:
+            print(f"❌ Error loading session: {str(e)}")
+            self.session_data = None
+            self.user_info = None
+    
+    def validate_session(self):
+        """Validate current session with authentication server."""
+        if not self.session_data:
+            print("❌ No session data available")
+            return False
+        
+        # Check if session file was created recently (within last 10 minutes)
+        # This helps avoid immediate expiration for fresh sessions
+        session_timestamp = self.session_data.get('timestamp', 0)
+        current_time = time.time()
+        session_age = current_time - session_timestamp
+        
+        if session_age < 600:  # Less than 10 minutes old
+            print(f"✅ Session is fresh ({session_age:.0f}s old), skipping validation")
+            return True
+        
+        try:
+            import sys
+            import os
+            # Add auth directory to path
+            auth_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'auth')
+            if auth_path not in sys.path:
+                sys.path.append(auth_path)
+            
+            from user_auth import UserAuthenticator
+            auth = UserAuthenticator()
+            
+            token = self.session_data.get('token')
+            if not token:
+                print("❌ No session token found")
+                return False
+            
+            validation_result = auth.validate_session(token)
+            is_valid = validation_result and validation_result.get('valid', False)
+            
+            if is_valid:
+                print(f"✅ Session validated successfully for {self.user_info.get('username', 'Unknown')}")
+            else:
+                print(f"❌ Session validation failed: {validation_result}")
+            
+            return is_valid
+        except Exception as e:
+            print(f"❌ Session validation error: {str(e)}")
+            return False
+    
+    def start_session_monitoring(self):
+        """Start periodic session validation."""
+        # Give a grace period for initial startup - validate after 30 seconds
+        self.root.after(30000, self.periodic_session_check)
+    
+    def periodic_session_check(self):
+        """Periodic session validation check."""
+        if self.validate_session():
+            # Update user info display to show active session
+            self.update_user_info_display()
+            # Schedule next validation in 5 minutes
+            self.root.after(300000, self.periodic_session_check)
+        else:
+            # Session expired - update display and close
+            if hasattr(self, 'user_info_label'):
+                self.user_info_label.config(text="🔴 Session Expired", foreground='red')
+            messagebox.showwarning("Session Expired", 
+                                 "Your session has expired. The application will now close.")
+            self.cleanup_and_exit()
+    
+    def on_closing(self):
+        """Handle window closing event."""
+        if messagebox.askokcancel("Quit", "Do you want to quit?"):
+            self.cleanup_and_exit()
+    
+    def cleanup_and_exit(self):
+        """Clean up session and exit application."""
+        try:
+            # Close database connection
+            if hasattr(self, 'db_connection') and self.db_connection:
+                self.db_connection.close()
+            
+            # Clean up session file
+            if self.session_file_path and os.path.exists(self.session_file_path):
+                try:
+                    os.remove(self.session_file_path)
+                    print("✅ Session file cleaned up")
+                except Exception as e:
+                    print(f"⚠️ Could not remove session file: {str(e)}")
+            
+            # Close GUI
+            self.root.quit()
+            self.root.destroy()
+            
+        except Exception as e:
+            print(f"❌ Error during cleanup: {str(e)}")
+        finally:
+            # Force exit if needed
+            import sys
+            sys.exit(0)
 
 def main():
+    """Main function with authentication session support."""
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='File Upload & PostgreSQL Manager')
+    parser.add_argument('--auth-session', type=str, help='Path to authentication session file')
+    args = parser.parse_args()
+    
     print("🚀 Starting File Upload & PostgreSQL GUI - JSON Storage...")
+    if args.auth_session:
+        print(f"🔐 Authentication session file: {args.auth_session}")
     print("📋 Look for window: 'File Upload & PostgreSQL Manager - JSON Storage'")
     
     # Check database requirements
@@ -1468,7 +1895,7 @@ def main():
         return
     
     root = tk.Tk()
-    app = FileUploadJSONGUI(root)
+    app = FileUploadJSONGUI(root, session_file_path=args.auth_session)
     
     # Center window
     root.update_idletasks()
@@ -1477,6 +1904,8 @@ def main():
     root.geometry(f"+{x}+{y}")
     
     print("✅ PostgreSQL JSON File Upload GUI Created - Window should be visible now")
+    if args.auth_session:
+        print("🔐 Authentication session loaded")
     print("🔧 Features: JSON File Storage + Scheduled Processing + Job Management")
     
     root.mainloop()
