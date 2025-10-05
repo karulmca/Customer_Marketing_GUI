@@ -57,18 +57,33 @@ app = FastAPI(
 )
 
 # CORS middleware for React frontend
+# Configure CORS origins based on environment
+cors_origins = [
+    "http://localhost:3000", 
+    "http://localhost:3001", 
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001"
+]
+
+# Add production origins
+environment = os.getenv("ENVIRONMENT", "development")
+if environment == "production":
+    cors_origins.extend([
+        "https://company-scraper-frontend.onrender.com",
+        # Add any additional production domains here
+    ])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000", 
-        "http://localhost:3001", 
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3001"
-    ],  # React dev server on multiple ports
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Log CORS configuration for debugging
+logger.info(f"🌐 CORS configured for origins: {cors_origins}")
+logger.info(f"🔧 Environment: {environment}")
 
 # Mount static files from React build
 static_dir = os.path.join(parent_dir, "frontend", "build")
