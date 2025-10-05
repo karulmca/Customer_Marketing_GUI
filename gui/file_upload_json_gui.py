@@ -312,7 +312,7 @@ class FileUploadJSONGUI:
         title_frame = ttk.Frame(main_frame)
         title_frame.pack(fill=tk.X, pady=(0, 20))
         
-        title_label = ttk.Label(title_frame, text="📁 File Upload - JSON Storage for Scheduled Processing", 
+        title_label = ttk.Label(title_frame, text="📁 File Upload and Scheduled to Processing", 
                                font=('Arial', 16, 'bold'))
         title_label.pack(side=tk.LEFT)
         

@@ -92,3 +92,9 @@ restore_dropped_tables_*.sql
 
 # CSV test files
 test_*.csv
+
+# Docker
+.env.production
+
+# SSL certificates (production only)
+ssl/

@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
+import { API_ENDPOINTS } from '../config/apiConfig';
 import {
   Box,
   Card,
@@ -211,7 +212,7 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
       const formData = new FormData();
       formData.append('file', file);
       
-      const response = await fetch(`http://localhost:8000/api/files/validate-headers?session_id=${sessionId}`, {
+      const response = await fetch(API_ENDPOINTS.files.validateHeaders(sessionId), {
         method: 'POST',
         body: formData
       });
@@ -328,7 +329,7 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
       setDownloadingTemplate(true);
       setError('');
       
-      const response = await fetch('http://localhost:8000/api/sample-template');
+      const response = await fetch(API_ENDPOINTS.templates.sample);
       
       if (!response.ok) {
         throw new Error('Failed to download template');
@@ -394,7 +395,7 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
   const handleDownloadProcessedFile = async (fileId, fileName) => {
     try {
       setError('');
-      const response = await fetch(`http://localhost:8000/api/files/download-processed/${fileId}?session_id=${sessionId}`, {
+      const response = await fetch(API_ENDPOINTS.files.downloadProcessed(fileId, sessionId), {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -868,7 +869,7 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
                 <Box display="flex" alignItems="center" gap={2} sx={{ mb: 3 }}>
                   <UploadIcon color="primary" />
                   <Box sx={{ flexGrow: 1 }}>
-                    <Typography variant="h6">File Upload - JSON Storage for Scheduled Processing</Typography>
+                    <Typography variant="h6">File Upload and Scheduled to Processing</Typography>
                     <Typography variant="body2" color="text.secondary">
                       Upload Excel/CSV files → Store as JSON → Process with enhanced scraping
                     </Typography>

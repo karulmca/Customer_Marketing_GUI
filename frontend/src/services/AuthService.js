@@ -1,15 +1,8 @@
 import axios from 'axios';
+import { API_CONFIG, API_ENDPOINTS } from '../config/apiConfig';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
-
-// Create axios instance with default config
-const api = axios.create({
-  baseURL: API_BASE_URL,
-  timeout: 30000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
+// Create axios instance with centralized config
+const api = axios.create(API_CONFIG);
 
 // Request interceptor for debugging
 api.interceptors.request.use(

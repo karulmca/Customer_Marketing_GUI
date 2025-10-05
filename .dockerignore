@@ -1,0 +1,62 @@
+# Git and version control
+.git
+.gitignore
+
+# Environment files (use .env.production instead)
+.env
+.env.local
+.env.development
+
+# Dependencies
+node_modules
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# Logs
+*.log
+logs/
+
+# Database files
+*.db
+*.sqlite
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+build/
+dist/
+*.spec
+
+# Test files
+test_*
+**/test_*
+
+# Cache directories
+.cache/
+*/.cache/
+
+# Temporary files
+*.tmp
+*.temp
+*~
+
+# Documentation (optional, include if needed)
+documentation/
+*.md
+
+# Results and test data
+results/
+test_data/
+
+# SSL certificates (will be mounted separately)
+ssl/

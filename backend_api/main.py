@@ -78,6 +78,29 @@ if os.path.exists(static_dir):
 # Security
 security = HTTPBearer()
 
+# Health check endpoint for Docker
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Docker containers and load balancers"""
+    try:
+        # Check database connection
+        conn = get_database_connection()
+        if conn:
+            conn.close()
+            db_status = "healthy"
+        else:
+            db_status = "unhealthy"
+    except Exception as e:
+        db_status = f"error: {str(e)}"
+    
+    return {
+        "status": "healthy" if db_status == "healthy" else "unhealthy",
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0",
+        "database": db_status,
+        "scheduler": "active" if APSCHEDULER_AVAILABLE else "unavailable"
+    }
+
 # Global variables
 auth_system = UserAuthenticator()
 active_sessions = {}  # Store active user sessions
