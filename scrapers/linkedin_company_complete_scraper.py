@@ -191,45 +191,123 @@ class CompleteCompanyScraper:
             return False
     
     def _extract_size_multiple_strategies(self, soup: BeautifulSoup) -> Optional[str]:
-        """Try multiple extraction strategies for company size"""
-        strategies = [
-            self._strategy_meta_tags,
-            self._strategy_json_ld,
-            self._strategy_text_patterns,
-            self._strategy_css_selectors,
-            self._strategy_about_section
+        """Extract company size using proven working logic from GUI"""
+        text_content = soup.get_text()
+        
+        # LinkedIn's EXACT range patterns (proven working from GUI)
+        linkedin_ranges = [
+            r'(1-10)\s+employees?',
+            r'(11-50)\s+employees?', 
+            r'(51-200)\s+employees?',
+            r'(201-500)\s+employees?',
+            r'(501-1,000)\s+employees?',
+            r'(501-1000)\s+employees?',
+            r'(1,001-5,000)\s+employees?',
+            r'(1001-5000)\s+employees?',
+            r'(5,001-10,000)\s+employees?',
+            r'(5001-10000)\s+employees?',
+            r'(10,001\+)\s+employees?',
+            r'(10000\+)\s+employees?'
         ]
         
-        for strategy in strategies:
-            try:
-                result = strategy(soup, 'size')
-                if result:
-                    return result
-            except Exception as e:
-                logger.debug(f"Strategy failed: {strategy.__name__}: {e}")
-                continue
+        # Try LinkedIn's standard ranges first
+        for pattern in linkedin_ranges:
+            matches = re.findall(pattern, text_content, re.IGNORECASE)
+            if matches:
+                size = matches[0].strip()
+                logger.info(f"✅ Company size found: {size} employees")
+                return f"{size} employees"
         
+        # Fallback: look for Company size section specifically
+        company_size_patterns = [
+            r'Company size[:\s]*(1-10|11-50|51-200|201-500|501-1,?000|1,?001-5,?000|5,?001-10,?000|10,?000\+)\s+employees?',
+            r'Company size[:\s]*(\d+(?:,\d+)?-\d+(?:,\d+)?)\s+employees?'
+        ]
+        
+        for pattern in company_size_patterns:
+            matches = re.findall(pattern, text_content, re.IGNORECASE)
+            if matches:
+                size = matches[0].strip()
+                logger.info(f"✅ Company size found (pattern): {size} employees")
+                return f"{size} employees"
+        
+        # Last resort: any range pattern
+        general_patterns = [
+            r'(\d+(?:,\d+)?-\d+(?:,\d+)?)\s+employees?',
+            r'(\d+-\d+)\s+employees?'
+        ]
+        
+        for pattern in general_patterns:
+            matches = re.findall(pattern, text_content, re.IGNORECASE)
+            if matches:
+                size = matches[0].strip()
+                logger.info(f"✅ Company size found (general): {size} employees")
+                return f"{size} employees"
+        
+        logger.warning("❌ Company size not found")
         return None
     
     def _extract_industry_multiple_strategies(self, soup: BeautifulSoup) -> Optional[str]:
-        """Try multiple extraction strategies for industry"""
-        strategies = [
-            self._strategy_meta_tags,
-            self._strategy_json_ld,
-            self._strategy_text_patterns,
-            self._strategy_css_selectors,
-            self._strategy_about_section
+        """Extract industry using proven working logic from GUI"""
+        text_content = soup.get_text()
+        
+        # LinkedIn's industry patterns (proven working from GUI)
+        industry_patterns = [
+            r'Industry[:\s]*([^\n\r]+)',
+            r'Industries[:\s]*([^\n\r]+)',
+            r'Business Type[:\s]*([^\n\r]+)',
+            r'Sector[:\s]*([^\n\r]+)',
+            r'Category[:\s]*([^\n\r]+)'
         ]
         
-        for strategy in strategies:
+        for pattern in industry_patterns:
+            matches = re.findall(pattern, text_content, re.IGNORECASE)
+            if matches:
+                industry = matches[0].strip()
+                # Clean up common artifacts
+                industry = re.sub(r'^[:\s]*', '', industry)  # Remove leading colons/spaces
+                industry = re.sub(r'\s+', ' ', industry)      # Normalize whitespace
+                industry = industry.strip()
+                
+                if industry and len(industry) > 2:  # Valid industry found
+                    logger.info(f"✅ Industry found: {industry}")
+                    return industry
+        
+        # Try more specific LinkedIn selectors from GUI
+        specific_selectors = [
+            '.pv-entity__secondary-title',
+            '.company-industries',
+            '.org-top-card-summary__industry',
+            '[data-test-id="about-us-industry"]'
+        ]
+        
+        for selector in specific_selectors:
             try:
-                result = strategy(soup, 'industry')
-                if result:
-                    return result
+                elements = soup.select(selector)
+                for element in elements:
+                    text = element.get_text().strip()
+                    if text and len(text) > 2:
+                        logger.info(f"✅ Industry found (selector): {text}")
+                        return text
             except Exception as e:
-                logger.debug(f"Strategy failed: {strategy.__name__}: {e}")
+                logger.debug(f"Selector {selector} failed: {e}")
                 continue
         
+        # Fallback: Look for common industry keywords in context
+        industry_context_patterns = [
+            r'(?:works?\s+in|operates?\s+in|specializes?\s+in|focuses?\s+on)\s+([^.]+)',
+            r'(?:leader\s+in|expert\s+in|provider\s+of)\s+([^.]+)'
+        ]
+        
+        for pattern in industry_context_patterns:
+            matches = re.findall(pattern, text_content, re.IGNORECASE)
+            if matches:
+                industry = matches[0].strip()
+                if industry and len(industry) > 5:  # Longer context needed
+                    logger.info(f"✅ Industry found (context): {industry}")
+                    return industry
+        
+        logger.warning("❌ Industry not found")
         return None
     
     def _strategy_meta_tags(self, soup: BeautifulSoup, data_type: str) -> Optional[str]:

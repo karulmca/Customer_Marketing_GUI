@@ -24,6 +24,7 @@ if database_config_path not in sys.path:
 try:
     from database_config.file_upload_processor import FileUploadProcessor
     from database_config.db_utils import get_database_connection
+    from database_config.config_loader import get_scheduler_interval, is_single_job_per_user_enabled
     DATABASE_AVAILABLE = True
 except ImportError as e:
     print(f"❌ Database dependencies not available: {e}")
@@ -78,8 +79,13 @@ class ScheduledJobProcessor:
         try:
             logger.info("🔄 Starting scheduled processing of pending files...")
             
-            # Get pending uploads
-            pending_uploads = self.processor.get_pending_uploads()
+            # Get pending uploads with single job per user logic
+            if is_single_job_per_user_enabled():
+                pending_uploads = self.processor.get_pending_uploads_by_user_queue()
+                logger.info("🔒 Using single job per user processing")
+            else:
+                pending_uploads = self.processor.get_pending_uploads()
+                logger.info("🔓 Using multi-job processing")
             
             if pending_uploads is None or pending_uploads.empty:
                 logger.info("ℹ️ No pending uploads found")
@@ -205,7 +211,10 @@ def run_scheduled_processing():
     
     return success
 
-def run_continuous_processing(interval_minutes=30):
+def run_continuous_processing(interval_minutes=None):
+    """Run continuous processing with configurable interval"""
+    if interval_minutes is None:
+        interval_minutes = get_scheduler_interval()
     """Run continuous processing with specified interval"""
     logger.info(f"🔄 Starting continuous processing mode (interval: {interval_minutes} minutes)")
     
@@ -230,8 +239,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Scheduled File Upload Processor")
     parser.add_argument("--mode", choices=["single", "continuous"], default="single",
                        help="Processing mode: single run or continuous")
-    parser.add_argument("--interval", type=int, default=30,
-                       help="Interval in minutes for continuous mode (default: 30)")
+    parser.add_argument("--interval", type=int, default=2,
+                       help="Interval in minutes for continuous mode (default: 2)")
     parser.add_argument("--file-id", type=int,
                        help="Process specific file ID (single file mode)")
     

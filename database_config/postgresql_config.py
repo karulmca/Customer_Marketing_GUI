@@ -4,6 +4,7 @@ Handles database connections and configuration loading
 """
 
 import os
+import sys
 import psycopg2
 from psycopg2 import pool
 from sqlalchemy import create_engine, text
@@ -20,7 +21,43 @@ class PostgreSQLConfig:
     
     def __init__(self, config_file: str = None):
         """Initialize with configuration file or environment variables"""
-        self.config_file = config_file or os.path.join(os.path.dirname(__file__), '.env')
+        if config_file:
+            self.config_file = config_file
+        else:
+            # Detect if running as executable
+            is_executable = getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
+            
+            if is_executable:
+                # Running as PyInstaller executable
+                logger.info("Detected executable environment")
+                exe_dir = os.path.dirname(sys.executable)
+                possible_locations = [
+                    os.path.join(exe_dir, '.env'),  # Same directory as .exe
+                    os.path.join(os.getcwd(), '.env'),  # Current working directory
+                    '.env',  # Current directory
+                ]
+            else:
+                # Running as Python script
+                logger.info("Detected Python script environment")
+                possible_locations = [
+                    os.path.join(os.path.dirname(__file__), '.env'),  # database_config/.env
+                    os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'),  # root/.env
+                    '.env',  # current directory .env
+                ]
+            
+            self.config_file = None
+            for location in possible_locations:
+                logger.debug(f"Checking: {location}")
+                if os.path.exists(location):
+                    self.config_file = location
+                    logger.info(f"Found .env file at: {location}")
+                    break
+            
+            if not self.config_file:
+                logger.warning("No .env file found in any expected location")
+                logger.warning(f"Searched locations: {possible_locations}")
+                self.config_file = possible_locations[0]  # Use default as fallback
+        
         self.config = self.load_config()
         self.connection_pool = None
         self.engine = None
@@ -31,13 +68,20 @@ class PostgreSQLConfig:
         config = {}
         
         # Try to load from .env file first
-        if os.path.exists(self.config_file):
-            with open(self.config_file, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith('#') and '=' in line:
-                        key, value = line.split('=', 1)
-                        config[key.strip()] = value.strip()
+        if self.config_file and os.path.exists(self.config_file):
+            try:
+                logger.info(f"Loading configuration from: {self.config_file}")
+                with open(self.config_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#') and '=' in line:
+                            key, value = line.split('=', 1)
+                            config[key.strip()] = value.strip()
+                logger.info(f"Loaded {len(config)} configuration items")
+            except Exception as e:
+                logger.error(f"Failed to load .env file: {e}")
+        else:
+            logger.warning(f".env file not found at: {self.config_file}")
         
         # Override with environment variables if they exist
         env_vars = [

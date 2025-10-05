@@ -25,6 +25,7 @@ if database_config_path not in sys.path:
 try:
     from database_config.file_upload_processor import FileUploadProcessor
     from database_config.db_utils import get_database_connection
+    from database_config.config_loader import get_scheduler_interval, is_single_job_per_user_enabled
     DATABASE_AVAILABLE = True
 except ImportError as e:
     print(f"❌ Database dependencies not available: {e}")
@@ -572,9 +573,23 @@ class EnhancedScheduledProcessor:
         try:
             logger.info("🔍 Looking for pending files to process...")
             
-            # Get pending files with proper JSON handling
-            query = "SELECT id, file_name, raw_data::text as raw_data, uploaded_by FROM file_upload WHERE processing_status = 'pending' ORDER BY upload_date ASC"
-            pending_files = self.db_connection.query_to_dataframe(query)
+            # Get pending files with single job per user logic
+            if is_single_job_per_user_enabled():
+                pending_files = self.upload_processor.get_pending_uploads_by_user_queue()
+                logger.info("🔒 Using single job per user processing")
+                # Convert to the format expected by this processor
+                if pending_files is not None and not pending_files.empty:
+                    file_ids = pending_files['id'].tolist()
+                    if file_ids:
+                        placeholders = ','.join([f"'{fid}'" for fid in file_ids])
+                        query = f"SELECT id, file_name, raw_data::text as raw_data, uploaded_by FROM file_upload WHERE id IN ({placeholders}) ORDER BY upload_date ASC"
+                        pending_files = self.db_connection.query_to_dataframe(query)
+                    else:
+                        pending_files = pd.DataFrame()
+            else:
+                query = "SELECT id, file_name, raw_data::text as raw_data, uploaded_by FROM file_upload WHERE processing_status = 'pending' ORDER BY upload_date ASC"
+                pending_files = self.db_connection.query_to_dataframe(query)
+                logger.info("🔓 Using multi-job processing")
             
             if pending_files is None or pending_files.empty:
                 logger.info("✅ No pending files found")
@@ -973,8 +988,8 @@ def main():
     parser = argparse.ArgumentParser(description='Enhanced Scheduled Processor with LinkedIn Integration')
     parser.add_argument('--mode', choices=['single', 'continuous'], default='single',
                       help='Processing mode: single run or continuous')
-    parser.add_argument('--interval', type=int, default=30,
-                      help='Interval in minutes for continuous mode (default: 30)')
+    parser.add_argument('--interval', type=int, default=None,
+                      help='Interval in minutes for continuous mode (uses config if not specified)')
     parser.add_argument('--scraper-type', choices=['linkedin', 'complete', 'openai'], default='complete',
                       help='LinkedIn scraper type to use (default: complete)')
     parser.add_argument('--file-id', type=int,
@@ -1007,6 +1022,9 @@ def main():
             
             logger.info(f"✅ Single cycle completed. Processed {processed} files.")
         elif args.mode == 'continuous':
+            # Use config interval if not specified
+            if args.interval is None:
+                args.interval = get_scheduler_interval()
             logger.info(f"🔄 Running continuous processing every {args.interval} minutes...")
             
             # Show initial statistics

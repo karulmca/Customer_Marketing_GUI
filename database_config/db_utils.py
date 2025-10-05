@@ -96,6 +96,24 @@ class DatabaseConnection:
             print(f"❌ Query failed: {str(e)}")
             return None
     
+    def execute_query(self, query: str) -> bool:
+        """Execute non-SELECT queries (INSERT, UPDATE, DELETE)"""
+        try:
+            if not self.manager or not self.manager.engine:
+                print("❌ Database not connected")
+                return False
+            
+            from sqlalchemy import text
+            with self.manager.engine.connect() as connection:
+                result = connection.execute(text(query))
+                connection.commit()
+                print(f"✅ Query executed successfully. Affected rows: {result.rowcount if hasattr(result, 'rowcount') else 'N/A'}")
+                return True
+            
+        except Exception as e:
+            print(f"❌ Query execution failed: {str(e)}")
+            return False
+    
     def get_all_records(self, table_name: str = "company_data") -> Optional[pd.DataFrame]:
         """Get all records from a table"""
         query = f"SELECT * FROM {table_name} ORDER BY upload_date DESC"

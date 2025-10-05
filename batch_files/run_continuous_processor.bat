@@ -1,11 +1,11 @@
 @echo off
 :: Scheduled File Processor - Continuous Mode
-:: Runs continuous processing every 30 minutes
+:: Uses interval from config.json
 
 echo ========================================
 echo Scheduled File Processor - Continuous Mode
 echo ========================================
-echo Running continuous processing every 30 minutes
+echo Using scheduler interval from config.json
 echo Press Ctrl+C to stop
 echo ========================================
 echo.
@@ -29,7 +29,7 @@ echo.
 echo Press Ctrl+C to stop continuous processing
 echo.
 
-python scheduled_processor.py --mode continuous --interval 30
+python scheduled_processor.py --mode continuous --interval 2
 
 echo.
 echo ========================================
