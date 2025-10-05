@@ -74,3 +74,21 @@ frontend/node_modules/.cache/
 # Backup files
 *.backup
 *.bak
+
+# Test files
+test_*.py
+**/test_*.py
+
+# Debug files
+debug_*
+**/debug_*
+
+# Build artifacts
+*.spec
+company_scraper.spec
+
+# Database restoration files
+restore_dropped_tables_*.sql
+
+# CSV test files
+test_*.csv

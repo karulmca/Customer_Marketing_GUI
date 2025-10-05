@@ -1,7 +1,0 @@
-Company Data Scraper Launch Debug
-Time: 2025-10-03 18:17:54.664354
-Directory: C:\Viji\Automation\NewCode\CompanyDataScraper
-Executable: C:\Users\karul\AppData\Local\Programs\Python\Python311\python.exe
-Frozen: False
-MEIPASS: False
-Database connection: SUCCESS
