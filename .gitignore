@@ -55,6 +55,17 @@ Thumbs.db
 *.db
 *.sqlite
 
+# Large and problematic files
+database_config/postgresql_config.py.corrupted
+database_config/postgresql_config_clean.py
+database_config/*.corrupted
+
+# Cache directories
+.cache/
+*/.cache/
+frontend/node_modules/.cache/
+**/node_modules/.cache/
+
 # Temporary files
 *.tmp
 *.temp
