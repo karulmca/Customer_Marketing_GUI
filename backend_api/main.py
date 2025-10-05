@@ -130,6 +130,32 @@ async def health_check():
         "scheduler": "active" if APSCHEDULER_AVAILABLE else "unavailable"
     }
 
+@app.get("/scheduler-status")
+async def scheduler_status():
+    """Check detailed scheduler status and jobs"""
+    try:
+        if not scheduler:
+            return {"error": "Scheduler not initialized", "scheduler_running": False}
+        
+        jobs = scheduler.get_jobs()
+        job_info = []
+        for job in jobs:
+            job_info.append({
+                "id": job.id,
+                "name": job.name,
+                "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
+                "trigger": str(job.trigger)
+            })
+        
+        return {
+            "scheduler_running": scheduler.running,
+            "jobs": job_info,
+            "total_jobs": len(jobs),
+            "scheduler_available": APSCHEDULER_AVAILABLE
+        }
+    except Exception as e:
+        return {"error": str(e), "scheduler_running": False}
+
 # Global variables
 auth_system = UserAuthenticator()
 active_sessions = {}  # Store active user sessions

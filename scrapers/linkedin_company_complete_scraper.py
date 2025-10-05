@@ -658,9 +658,18 @@ class CompleteCompanyScraper:
             linkedin_url = row.get(linkedin_column, '')
             if linkedin_url:
                 linkedin_data = self.extract_linkedin_data(linkedin_url)
+                # Enhanced columns (detailed output)
                 df.at[index, 'Company_Size_Enhanced'] = linkedin_data['company_size']
                 df.at[index, 'Industry_Enhanced'] = linkedin_data['industry']
                 df.at[index, 'LinkedIn_Status'] = linkedin_data['linkedin_status']
+                
+                # Also populate original columns if they exist (for display compatibility)
+                if 'Size' in df.columns:
+                    df.at[index, 'Size'] = linkedin_data['company_size']
+                if 'Company_Size' in df.columns:
+                    df.at[index, 'Company_Size'] = linkedin_data['company_size']
+                if 'Industry' in df.columns:
+                    df.at[index, 'Industry'] = linkedin_data['industry']
             else:
                 df.at[index, 'LinkedIn_Status'] = 'No LinkedIn URL'
             
@@ -669,9 +678,14 @@ class CompleteCompanyScraper:
             company_name = row.get(company_name_column, '')
             if website_url:
                 revenue_data = self.extract_revenue_from_website(website_url, company_name)
+                # Enhanced columns (detailed output)
                 df.at[index, 'Revenue_Enhanced'] = revenue_data['revenue']
                 df.at[index, 'Revenue_Source'] = revenue_data['revenue_source']
                 df.at[index, 'Revenue_Status'] = revenue_data['revenue_status']
+                
+                # Also populate original column if it exists (for display compatibility)
+                if 'Revenue' in df.columns:
+                    df.at[index, 'Revenue'] = revenue_data['revenue']
             else:
                 df.at[index, 'Revenue_Status'] = 'No Website URL'
             
