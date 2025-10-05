@@ -1,0 +1,26 @@
+services:
+  # Backend API Service
+  - type: web
+    name: company-scraper-backend
+    env: docker
+    dockerfilePath: ./backend_api/Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      # You'll need to add your database connection details here
+      - key: DATABASE_URL
+        value: your_database_connection_string_here
+
+  # Frontend Service  
+  - type: web
+    name: company-scraper-frontend
+    env: static
+    buildCommand: cd frontend && npm ci && npm run build
+    staticPublishPath: ./frontend/build
+    envVars:
+      - key: REACT_APP_API_URL
+        value: https://company-scraper-backend.onrender.com/api
