@@ -4,6 +4,7 @@ services:
     name: company-scraper-backend
     env: docker
     dockerfilePath: ./backend_api/Dockerfile
+    dockerContext: ./
     plan: free
     healthCheckPath: /health
     envVars:
@@ -11,9 +12,22 @@ services:
         value: production
       - key: SECRET_KEY
         generateValue: true
-      # You'll need to add your database connection details here
       - key: DATABASE_URL
-        value: your_database_connection_string_here
+        value: postgresql://neondb_owner:npg_O0peSW3nPiDj@ep-steep-cloud-a8peyzo3-pooler.eastus2.azure.neon.tech/neondb?sslmode=require&channel_binding=require
+      - key: DB_HOST
+        value: ep-steep-cloud-a8peyzo3-pooler.eastus2.azure.neon.tech
+      - key: DB_PORT
+        value: 5432
+      - key: DB_NAME
+        value: neondb
+      - key: DB_USER
+        value: neondb_owner
+      - key: DB_PASSWORD
+        value: npg_O0peSW3nPiDj
+      - key: DB_DRIVER
+        value: postgresql
+      - key: DB_SSL_MODE
+        value: require
 
   # Frontend Service  
   - type: web
