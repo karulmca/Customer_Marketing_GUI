@@ -24,14 +24,27 @@ class ConfigLoader:
     def _load_config(self) -> Dict[str, Any]:
         """Load configuration from JSON file"""
         try:
-            if not os.path.exists(self.config_file):
-                print(f"⚠️ Config file not found: {self.config_file}")
-                return self._get_default_config()
+            # First try the main config file
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    print(f"✅ Configuration loaded from: {self.config_file}")
+                    return config
             
-            with open(self.config_file, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                print(f"✅ Configuration loaded from: {self.config_file}")
-                return config
+            # Try production config as fallback
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(current_dir)
+            production_config = os.path.join(project_root, "config.production.json")
+            
+            if os.path.exists(production_config):
+                with open(production_config, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    print(f"✅ Production configuration loaded from: {production_config}")
+                    return config
+            
+            print(f"⚠️ Config files not found: {self.config_file}, {production_config}")
+            print("Using default configuration")
+            return self._get_default_config()
                 
         except Exception as e:
             print(f"❌ Error loading config: {e}")

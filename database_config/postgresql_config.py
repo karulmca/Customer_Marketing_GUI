@@ -54,8 +54,12 @@ class PostgreSQLConfig:
                     break
             
             if not self.config_file:
-                logger.warning("No .env file found in any expected location")
-                logger.warning(f"Searched locations: {possible_locations}")
+                # Only show warnings if no environment variables are set
+                if not os.getenv('DATABASE_URL') and not os.getenv('DB_HOST'):
+                    logger.warning("No .env file found in any expected location")
+                    logger.warning(f"Searched locations: {possible_locations}")
+                else:
+                    logger.info("Using environment variables for database configuration")
                 self.config_file = possible_locations[0]  # Use default as fallback
         
         self.config = self.load_config()
@@ -81,7 +85,11 @@ class PostgreSQLConfig:
             except Exception as e:
                 logger.error(f"Failed to load .env file: {e}")
         else:
-            logger.warning(f".env file not found at: {self.config_file}")
+            # Only warn if no environment variables are available
+            if not os.getenv('DATABASE_URL') and not os.getenv('DB_HOST'):
+                logger.warning(f".env file not found at: {self.config_file}")
+            else:
+                logger.info("Using environment variables instead of .env file")
         
         # Override with environment variables if they exist
         env_vars = [

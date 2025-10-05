@@ -24,10 +24,19 @@ import argparse
 def load_config(config_file='config.json'):
     """Load configuration from JSON file"""
     try:
-        with open(config_file, 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        logger.warning(f"Config file {config_file} not found, using defaults")
+        # Try main config file first
+        if os.path.exists(config_file):
+            with open(config_file, 'r') as f:
+                return json.load(f)
+        
+        # Try production config as fallback
+        production_config = 'config.production.json'
+        if os.path.exists(production_config):
+            logger.info(f"Using production config: {production_config}")
+            with open(production_config, 'r') as f:
+                return json.load(f)
+        
+        logger.warning(f"Config files not found: {config_file}, {production_config}. Using defaults.")
         return {}
     except json.JSONDecodeError:
         logger.error(f"Invalid JSON in config file {config_file}, using defaults")
