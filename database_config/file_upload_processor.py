@@ -27,8 +27,20 @@ from config_loader import ConfigLoader
 
 # Import LinkedIn scraper
 try:
-    from linkedin_company_complete_scraper import CompleteCompanyScraper
+    # Try different import paths for different environments
+    try:
+        from linkedin_company_complete_scraper import CompleteCompanyScraper
+    except ImportError:
+        # Try from scrapers directory
+        import sys
+        import os
+        scrapers_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'scrapers')
+        if scrapers_path not in sys.path:
+            sys.path.append(scrapers_path)
+        from linkedin_company_complete_scraper import CompleteCompanyScraper
+    
     LINKEDIN_SCRAPER_AVAILABLE = True
+    print("✅ LinkedIn scraper imported successfully")
 except ImportError as e:
     print(f"⚠️ LinkedIn scraper not available: {e}")
     LINKEDIN_SCRAPER_AVAILABLE = False
