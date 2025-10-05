@@ -156,6 +156,37 @@ async def scheduler_status():
     except Exception as e:
         return {"error": str(e), "scheduler_running": False}
 
+@app.get("/debug/pending-uploads")
+async def debug_pending_uploads():
+    """Debug endpoint to check pending uploads"""
+    try:
+        from database_config.file_upload_processor import FileUploadProcessor
+        processor = FileUploadProcessor()
+        
+        # Get all uploads (not just pending)
+        all_uploads_query = """
+        SELECT id, file_name, processing_status, upload_date, uploaded_by 
+        FROM file_upload 
+        ORDER BY upload_date DESC 
+        LIMIT 10
+        """
+        
+        from database_config.postgresql_config import PostgreSQLConfig
+        db_config = PostgreSQLConfig()
+        all_uploads = db_config.query_to_dataframe(all_uploads_query)
+        
+        # Get pending uploads specifically
+        pending_df = processor.get_pending_uploads()
+        
+        return {
+            "total_recent_uploads": len(all_uploads) if not all_uploads.empty else 0,
+            "recent_uploads": all_uploads.to_dict('records') if not all_uploads.empty else [],
+            "pending_uploads_count": len(pending_df) if pending_df is not None and not pending_df.empty else 0,
+            "pending_uploads": pending_df.to_dict('records') if pending_df is not None and not pending_df.empty else []
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
 # Global variables
 auth_system = UserAuthenticator()
 active_sessions = {}  # Store active user sessions
