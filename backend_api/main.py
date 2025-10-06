@@ -13,6 +13,7 @@ from typing import Optional, List, Dict, Any
 import os
 import sys
 import json
+import asyncio
 
 # Add parent directory to path for imports  
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'database_config'))
@@ -50,11 +51,20 @@ from database_config.db_utils import get_database_connection, check_database_req
 from database_config.file_upload_processor import FileUploadProcessor
 from database_config.config_loader import get_scheduler_interval, is_single_job_per_user_enabled
 
+# MVC controllers disabled for now to fix import issues
+MVC_CONTROLLERS_AVAILABLE = False
+
 app = FastAPI(
     title="Company Data Scraper API",
     description="REST API for file upload and data processing",
     version="1.0.0"
 )
+
+# Include MVC routers if available
+if MVC_CONTROLLERS_AVAILABLE:
+    app.include_router(company_data_router)
+    app.include_router(file_data_router)
+    logger.info("✅ MVC controllers registered successfully")
 
 # CORS middleware for React frontend
 # Configure CORS origins based on environment
@@ -470,18 +480,27 @@ async def get_users(session_id: str):
         # if user_info.get('role') != 'admin':
         #     raise HTTPException(status_code=403, detail="Admin access required")
         
-        # Get users from database
-        from auth.user_auth import UserAuthenticator
-        auth = UserAuthenticator()
-        
-        # Get connection and fetch users
-        conn = get_database_connection()
-        if not conn:
-            raise HTTPException(status_code=500, detail="Database connection failed")
-        
-        cursor = conn.cursor()
+        # Get users from database using PostgreSQL connection
+        from database_config.postgresql_config import PostgreSQLConfig
+        import psycopg2
+
+        db_config = PostgreSQLConfig()
+        connection_params = db_config.get_connection_params()
+        connection = psycopg2.connect(**connection_params)
+
+        cursor = connection.cursor()
+        # First, add missing columns if they don't exist
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE")
+            cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_superuser BOOLEAN DEFAULT FALSE")
+            connection.commit()
+        except Exception as e:
+            logger.info(f"Columns may already exist: {e}")
+
         cursor.execute("""
-            SELECT id, username, email, role, created_at 
+            SELECT id, username, email, role, created_at, 
+                   COALESCE(is_active, TRUE) as is_active,
+                   COALESCE(is_superuser, FALSE) as is_superuser
             FROM users 
             ORDER BY created_at DESC
         """)
@@ -493,11 +512,13 @@ async def get_users(session_id: str):
                 'username': row[1],
                 'email': row[2],
                 'role': row[3],
-                'created_at': row[4].isoformat() if row[4] else None
+                'created_at': row[4].isoformat() if row[4] else None,
+                'is_active': row[5],
+                'is_superuser': row[6]
             })
         
         cursor.close()
-        conn.close()
+        connection.close()
         
         return {"success": True, "users": users}
         
@@ -526,18 +547,40 @@ async def create_user(user_data: dict, session_id: str):
         )
         
         if result['success']:
-            # Update role if specified
-            if user_data.get('role') and user_data.get('role') != 'user':
-                conn = get_database_connection()
-                if conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        "UPDATE users SET role = %s WHERE username = %s",
-                        (user_data.get('role'), user_data.get('username'))
-                    )
-                    conn.commit()
-                    cursor.close()
-                    conn.close()
+            # Update role and status fields if specified
+            from database_config.postgresql_config import PostgreSQLConfig
+            import psycopg2
+
+            db_config = PostgreSQLConfig()
+            connection_params = db_config.get_connection_params()
+            connection = psycopg2.connect(**connection_params)
+            
+            cursor = connection.cursor()
+            
+            # Build update query for additional fields
+            update_fields = []
+            values = []
+            
+            if user_data.get('role'):
+                update_fields.append("role = %s")
+                values.append(user_data.get('role'))
+            
+            if 'is_active' in user_data:
+                update_fields.append("is_active = %s")
+                values.append(user_data.get('is_active', True))
+            
+            if 'is_superuser' in user_data:
+                update_fields.append("is_superuser = %s")
+                values.append(user_data.get('is_superuser', False))
+            
+            if update_fields:
+                values.append(user_data.get('username'))
+                query = f"UPDATE users SET {', '.join(update_fields)} WHERE username = %s"
+                cursor.execute(query, values)
+                connection.commit()
+            
+            cursor.close()
+            connection.close()
             
             return {"success": True, "message": "User created successfully"}
         else:
@@ -556,12 +599,15 @@ async def update_user(user_data: dict, session_id: str):
         if not user_info:
             raise HTTPException(status_code=401, detail="Invalid session")
         
-        # Get connection and update user
-        conn = get_database_connection()
-        if not conn:
-            raise HTTPException(status_code=500, detail="Database connection failed")
+        # Get connection and update user using PostgreSQL connection
+        from database_config.postgresql_config import PostgreSQLConfig
+        import psycopg2
+
+        db_config = PostgreSQLConfig()
+        connection_params = db_config.get_connection_params()
+        connection = psycopg2.connect(**connection_params)
         
-        cursor = conn.cursor()
+        cursor = connection.cursor()
         
         # Build update query dynamically
         update_fields = []
@@ -579,14 +625,22 @@ async def update_user(user_data: dict, session_id: str):
             update_fields.append("role = %s")
             values.append(user_data['role'])
         
+        if 'is_active' in user_data:
+            update_fields.append("is_active = %s")
+            values.append(user_data['is_active'])
+        
+        if 'is_superuser' in user_data:
+            update_fields.append("is_superuser = %s")
+            values.append(user_data['is_superuser'])
+        
         if update_fields:
             values.append(user_data['id'])  # Add ID for WHERE clause
             query = f"UPDATE users SET {', '.join(update_fields)} WHERE id = %s"
             cursor.execute(query, values)
-            conn.commit()
+            connection.commit()
         
         cursor.close()
-        conn.close()
+        connection.close()
         
         return {"success": True, "message": "User updated successfully"}
         
@@ -595,7 +649,7 @@ async def update_user(user_data: dict, session_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to update user: {str(e)}")
 
 @app.delete("/api/auth/users/{user_id}")
-async def delete_user(user_id: int, session_id: str):
+async def delete_user(user_id: str, session_id: str):
     """Delete user"""
     try:
         # Verify session
@@ -603,12 +657,15 @@ async def delete_user(user_id: int, session_id: str):
         if not user_info:
             raise HTTPException(status_code=401, detail="Invalid session")
         
-        # Prevent self-deletion
-        conn = get_database_connection()
-        if not conn:
-            raise HTTPException(status_code=500, detail="Database connection failed")
+        # Prevent self-deletion using PostgreSQL connection
+        from database_config.postgresql_config import PostgreSQLConfig
+        import psycopg2
+
+        db_config = PostgreSQLConfig()
+        connection_params = db_config.get_connection_params()
+        connection = psycopg2.connect(**connection_params)
         
-        cursor = conn.cursor()
+        cursor = connection.cursor()
         
         # Check if trying to delete self
         cursor.execute("SELECT username FROM users WHERE id = %s", (user_id,))
@@ -616,19 +673,19 @@ async def delete_user(user_id: int, session_id: str):
         
         if user_to_delete and user_to_delete[0] == user_info.get('username'):
             cursor.close()
-            conn.close()
+            connection.close()
             raise HTTPException(status_code=400, detail="Cannot delete your own account")
         
         # Delete user
         cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
         if cursor.rowcount == 0:
             cursor.close()
-            conn.close()
+            connection.close()
             raise HTTPException(status_code=404, detail="User not found")
         
-        conn.commit()
+        connection.commit()
         cursor.close()
-        conn.close()
+        connection.close()
         
         return {"success": True, "message": "User deleted successfully"}
         
@@ -646,15 +703,25 @@ async def debug_sessions():
 
 # Helper function to verify session
 def verify_session(session_id: str):
-    """Verify active session - check database first, then memory"""
-    print(f"DEBUG: Verifying session_id: {session_id}")
-    print(f"DEBUG: Active sessions in memory: {list(active_sessions.keys())}")
+    """Verify active session - enhanced with better persistence and error handling"""
+    logger.debug(f"Verifying session_id: {session_id}")
+    logger.debug(f"Active sessions in memory: {list(active_sessions.keys())}")
+    
+    if not session_id or session_id.strip() == "":
+        logger.warning("Empty session_id provided")
+        return None
     
     # First check memory (fast path)
     if session_id in active_sessions:
-        return active_sessions[session_id]
+        session_data = active_sessions[session_id]
+        # Update last accessed time in database
+        try:
+            _update_session_last_accessed(session_id)
+        except Exception as e:
+            logger.warning(f"Could not update session last accessed: {e}")
+        return session_data
     
-    # If not in memory, check database (slow path but persistent)
+    # If not in memory, check database (persistent sessions)
     try:
         from database_config.postgresql_config import PostgreSQLConfig
         import psycopg2
@@ -664,9 +731,10 @@ def verify_session(session_id: str):
         connection = psycopg2.connect(**connection_params)
         cursor = connection.cursor()
         
-        # Check if session exists in database and is still valid
+        # Check if session exists and is valid (extended expiry time)
         cursor.execute("""
-            SELECT us.user_id, us.created_at, u.username, u.email, u.role
+            SELECT us.user_id, us.created_at, u.username, u.email, u.role,
+                   us.expires_at, us.last_accessed
             FROM user_sessions us
             JOIN users u ON us.user_id = u.id
             WHERE us.session_token = %s 
@@ -674,11 +742,19 @@ def verify_session(session_id: str):
         """, (session_id,))
         
         result = cursor.fetchone()
-        cursor.close()
-        connection.close()
         
         if result:
-            user_id, created_at, username, email, role = result
+            user_id, created_at, username, email, role, expires_at, last_accessed = result
+            
+            # Extend session if it's been accessed recently
+            cursor.execute("""
+                UPDATE user_sessions 
+                SET expires_at = NOW() + INTERVAL '24 hours',
+                    last_accessed = NOW()
+                WHERE session_token = %s
+            """, (session_id,))
+            connection.commit()
+            
             session_data = {
                 'user_info': {
                     'id': user_id,
@@ -687,24 +763,105 @@ def verify_session(session_id: str):
                     'role': role
                 },
                 'session_token': session_id,
-                'login_time': created_at.isoformat()
+                'login_time': created_at.isoformat(),
+                'expires_at': expires_at.isoformat() if expires_at else None
             }
             
-            # Restore session to memory
+            # Restore session to memory with extended expiry
             active_sessions[session_id] = session_data
-            print(f"✅ Session restored from database: {session_id}")
+            logger.info(f"✅ Session restored from database: {session_id} for user: {username}")
+            
+            cursor.close()
+            connection.close()
             return session_data
         else:
-            print(f"❌ Session not found in database: {session_id}")
+            logger.warning(f"❌ Session not found or expired in database: {session_id}")
+            cursor.close()
+            connection.close()
+            return None
             
     except Exception as e:
-        print(f"❌ Error checking database session: {str(e)}")
+        logger.error(f"❌ Error checking database session: {str(e)}")
     
     # Session not found anywhere
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid or expired session. Please login again."
-    )
+    return None
+
+def _update_session_last_accessed(session_id: str):
+    """Update session last accessed time"""
+    try:
+        from database_config.postgresql_config import PostgreSQLConfig
+        import psycopg2
+        
+        db_config = PostgreSQLConfig()
+        connection_params = db_config.get_connection_params()
+        connection = psycopg2.connect(**connection_params)
+        cursor = connection.cursor()
+        
+        cursor.execute("""
+            UPDATE user_sessions 
+            SET last_accessed = NOW()
+            WHERE session_token = %s
+        """, (session_id,))
+        connection.commit()
+        cursor.close()
+        connection.close()
+        
+    except Exception as e:
+        logger.debug(f"Session update error: {e}")
+
+# Enhanced job queue management for concurrent users
+job_queue_lock = asyncio.Lock()
+user_processing_status = {}  # Track processing status per user
+
+# Cleanup function for stale jobs
+async def cleanup_stale_jobs():
+    """Clean up jobs that have been running for too long (over 30 minutes)"""
+    try:
+        async with job_queue_lock:
+            current_time = datetime.now()
+            stale_users = []
+            
+            for username, job_info in user_processing_status.items():
+                if job_info.get('status') == 'processing':
+                    started_str = job_info.get('started')
+                    if started_str:
+                        try:
+                            started_time = datetime.fromisoformat(started_str)
+                            time_diff = current_time - started_time
+                            
+                            # If job has been running for more than 30 minutes, mark as stale
+                            if time_diff.total_seconds() > 1800:  # 30 minutes
+                                stale_users.append(username)
+                                logger.warning(f"🧹 Marking stale job for user {username}: {job_info.get('filename', 'unknown')} (running for {time_diff})")
+                        except (ValueError, TypeError):
+                            # Invalid timestamp, mark as stale
+                            stale_users.append(username)
+            
+            # Clean up stale jobs
+            for username in stale_users:
+                user_processing_status[username]['status'] = 'timeout'
+                user_processing_status[username]['error'] = 'Job timed out after 30 minutes'
+                user_processing_status[username]['completed'] = current_time.isoformat()
+    
+    except Exception as e:
+        logger.error(f"Error during stale job cleanup: {str(e)}")
+
+# Schedule cleanup every 5 minutes (will be started on app startup)
+cleanup_scheduler = None
+try:
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    cleanup_scheduler = AsyncIOScheduler()
+    cleanup_scheduler.add_job(cleanup_stale_jobs, 'interval', minutes=5, id='cleanup_stale_jobs')
+    logger.info("🧹 Job cleanup scheduler configured (will start on app startup)")
+except ImportError:
+    logger.warning("APScheduler not available for job cleanup")
+
+# Start scheduler on app startup
+@app.on_event("startup")
+async def startup_event():
+    if cleanup_scheduler:
+        cleanup_scheduler.start()
+        logger.info("🧹 Started job cleanup scheduler")
 
 # File upload endpoints
 @app.post("/api/files/upload")
@@ -1557,10 +1714,20 @@ async def validate_file_headers_endpoint(file: UploadFile = File(...), session_i
 
 @app.post("/api/files/upload-json")
 async def upload_file_as_json(file: UploadFile = File(...), session_id: str = ""):
-    """Upload file as JSON to file_upload table (matches original GUI workflow)"""
+    """Upload file as JSON to file_upload table with enhanced session and user management"""
     try:
-        # Verify session
-        verify_session(session_id)
+        # Verify session with enhanced validation
+        session_data = verify_session(session_id)
+        if not session_data:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired session. Please login again."
+            )
+        
+        # Get user info from session
+        user_info = session_data.get('user_info', {})
+        username = user_info.get('username', 'Web_User')
+        user_id = user_info.get('id', 0)
         
         # Validate file
         if not file.filename:
@@ -1581,29 +1748,34 @@ async def upload_file_as_json(file: UploadFile = File(...), session_id: str = ""
                 detail=f"Invalid file format: {validation_result['error']}"
             )
         
-        # File content already read for validation, continue with processing
-        # Initialize file processor (from original GUI logic)
+        # Initialize file processor with user context
         try:
             file_processor = FileUploadProcessor()
             
-            # Create temporary file for processing (like original GUI)
+            # Create temporary file for processing
             import tempfile
             with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as temp_file:
                 temp_file.write(file_content)
                 temp_file_path = temp_file.name
             
             try:
-                # Upload as JSON using original logic
-                uploaded_by = active_sessions.get(session_id, {}).get("username", "Web_User")
-                file_upload_id = file_processor.upload_file_as_json(temp_file_path, uploaded_by, original_filename=file.filename)
+                # Upload as JSON with user-specific context
+                file_upload_id = file_processor.upload_file_as_json(
+                    temp_file_path, 
+                    uploaded_by=username,
+                    original_filename=file.filename,
+                    user_id=user_id
+                )
                 
                 if file_upload_id:
+                    logger.info(f"✅ File uploaded as JSON: {file.filename} by user {username} (ID: {file_upload_id})")
                     return {
                         "success": True,
                         "file_upload_id": file_upload_id,
                         "message": f"File uploaded as JSON successfully (ID: {file_upload_id})",
                         "filename": file.filename,
-                        "status": "pending_processing"
+                        "status": "pending_processing",
+                        "uploaded_by": username
                     }
                 else:
                     raise HTTPException(status_code=500, detail="Failed to upload file as JSON")
@@ -1621,14 +1793,35 @@ async def upload_file_as_json(file: UploadFile = File(...), session_id: str = ""
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Upload failed for user {username if 'username' in locals() else 'unknown'}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 @app.post("/api/files/upload-and-process")
 async def upload_and_process_file(file: UploadFile = File(...), session_id: str = ""):
-    """Upload file as JSON and immediately process it (matches original GUI workflow)"""
+    """Upload file as JSON and immediately process it with concurrent user support"""
     try:
-        # Verify session
-        verify_session(session_id)
+        # Verify session with enhanced validation
+        session_data = verify_session(session_id)
+        if not session_data:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired session. Please login again."
+            )
+        
+        # Get user info from session
+        user_info = session_data.get('user_info', {})
+        username = user_info.get('username', 'Web_User')
+        user_id = user_info.get('id', 0)
+        
+        # Check if user already has a job in progress
+        async with job_queue_lock:
+            if username in user_processing_status:
+                current_job = user_processing_status[username]
+                if current_job['status'] == 'processing':
+                    raise HTTPException(
+                        status_code=409, 
+                        detail=f"You already have a job in progress (started at {current_job['started']}). Please wait for completion."
+                    )
         
         # Validate file
         if not file.filename:
@@ -1649,44 +1842,86 @@ async def upload_and_process_file(file: UploadFile = File(...), session_id: str 
                 detail=f"Invalid file format: {validation_result['error']}"
             )
         
-        # Initialize file processor (from original GUI logic)
+        # Initialize file processor with user context
         try:
             file_processor = FileUploadProcessor()
             
-            # Create temporary file for processing (like original GUI)
+            # Create temporary file for processing
             import tempfile
             with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as temp_file:
                 temp_file.write(file_content)
                 temp_file_path = temp_file.name
             
             try:
-                # Upload as JSON using original logic
-                uploaded_by = active_sessions.get(session_id, {}).get("username", "Web_User")
-                file_upload_id = file_processor.upload_file_as_json(temp_file_path, uploaded_by, original_filename=file.filename)
+                # Mark user as processing
+                async with job_queue_lock:
+                    user_processing_status[username] = {
+                        'status': 'processing',
+                        'filename': file.filename,
+                        'started': datetime.now().isoformat(),
+                        'user_id': user_id,
+                        'operation': 'upload_and_process'
+                    }
+                
+                logger.info(f"🚀 Starting upload and process for user {username}: {file.filename}")
+                
+                # Upload as JSON with user context
+                file_upload_id = file_processor.upload_file_as_json(
+                    temp_file_path, 
+                    uploaded_by=username,
+                    original_filename=file.filename,
+                    user_id=user_id
+                )
                 
                 if file_upload_id:
-                    # Immediately process it (like original GUI's "Upload & Process Now")
-                    success = file_processor.process_uploaded_file(file_upload_id)
+                    # Immediately process it with user context
+                    success = file_processor.process_uploaded_file(file_upload_id, user_id=user_id)
+                    
+                    # Update processing status based on result
+                    async with job_queue_lock:
+                        if username in user_processing_status:
+                            user_processing_status[username]['status'] = 'completed' if success else 'failed'
+                            user_processing_status[username]['completed'] = datetime.now().isoformat()
+                            user_processing_status[username]['file_upload_id'] = file_upload_id
                     
                     if success:
+                        logger.info(f"✅ Upload and processing completed for user {username}: {file.filename} (ID: {file_upload_id})")
                         return {
                             "success": True,
                             "file_upload_id": file_upload_id,
                             "message": f"File uploaded and processed successfully (ID: {file_upload_id})",
                             "filename": file.filename,
-                            "status": "completed"
+                            "status": "completed",
+                            "processed_by": username
                         }
                     else:
+                        logger.warning(f"⚠️ Upload successful but processing failed for user {username}: {file.filename} (ID: {file_upload_id})")
                         return {
                             "success": False,
                             "file_upload_id": file_upload_id,
                             "message": f"File uploaded but processing failed (ID: {file_upload_id})",
                             "filename": file.filename,
-                            "status": "processing_failed"
+                            "status": "processing_failed",
+                            "processed_by": username
                         }
                 else:
+                    # Mark as failed
+                    async with job_queue_lock:
+                        if username in user_processing_status:
+                            user_processing_status[username]['status'] = 'failed'
+                            user_processing_status[username]['error'] = 'Failed to upload file as JSON'
+                    
                     raise HTTPException(status_code=500, detail="Failed to upload file as JSON")
                     
+            except Exception as e:
+                # Clear processing status on error
+                async with job_queue_lock:
+                    if username in user_processing_status:
+                        user_processing_status[username]['status'] = 'failed'
+                        user_processing_status[username]['error'] = str(e)
+                        user_processing_status[username]['completed'] = datetime.now().isoformat()
+                raise
+                
             finally:
                 # Clean up temp file
                 try:
@@ -1700,14 +1935,62 @@ async def upload_and_process_file(file: UploadFile = File(...), session_id: str 
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Upload and processing failed for user {username if 'username' in locals() else 'unknown'}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Upload and processing failed: {str(e)}")
+
+@app.get("/api/files/processing-status")
+async def get_processing_status(session_id: str):
+    """Get current processing status for the user"""
+    try:
+        # Verify session with enhanced validation
+        session_data = verify_session(session_id)
+        if not session_data:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired session. Please login again."
+            )
+        
+        # Get user info from session
+        user_info = session_data.get('user_info', {})
+        username = user_info.get('username', 'Web_User')
+        
+        # Get current processing status for this user
+        async with job_queue_lock:
+            current_status = user_processing_status.get(username, {
+                'status': 'idle',
+                'message': 'No active processing jobs'
+            })
+        
+        return {
+            "success": True,
+            "username": username,
+            "processing_status": current_status,
+            "queue_info": {
+                "total_active_jobs": len([
+                    status for status in user_processing_status.values() 
+                    if status.get('status') == 'processing'
+                ]),
+                "user_has_active_job": current_status.get('status') == 'processing'
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get processing status: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get processing status: {str(e)}")
 
 @app.get("/api/files/uploads")
 async def get_uploaded_files(session_id: str):
-    """Get list of uploaded files from file_upload table (matches original GUI workflow)"""
+    """Get list of uploaded files from file_upload table with enhanced session validation"""
     try:
-        # Verify session
-        verify_session(session_id)
+        # Verify session with enhanced validation
+        session_data = verify_session(session_id)
+        if not session_data:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired session. Please login again."
+            )
 
         # Query real uploaded files from database and adapt to UI's expected shape
         try:
@@ -1721,10 +2004,15 @@ async def get_uploaded_files(session_id: str):
             cursor = connection.cursor()
             cursor.execute(
                 """
-                SELECT id, file_name, upload_date, uploaded_by, processing_status, 
-                       records_count
-                FROM file_upload 
-                ORDER BY upload_date DESC 
+                SELECT fu.id, fu.file_name, fu.upload_date, fu.uploaded_by, fu.processing_status, 
+                       fu.records_count,
+                       COUNT(cd.id) as total_records,
+                       COUNT(CASE WHEN cd.processing_status = 'completed' THEN 1 END) as processed_count,
+                       COUNT(CASE WHEN cd.processing_status = 'failed' THEN 1 END) as failed_count
+                FROM file_upload fu
+                LEFT JOIN company_data cd ON fu.id = cd.file_upload_id
+                GROUP BY fu.id, fu.file_name, fu.upload_date, fu.uploaded_by, fu.processing_status, fu.records_count
+                ORDER BY fu.upload_date DESC 
                 LIMIT 50
                 """
             )
@@ -1738,11 +2026,15 @@ async def get_uploaded_files(session_id: str):
                 files.append({
                     "id": r[0],
                     "filename": r[1],
+                    "file_name": r[1],  # Add both variants for compatibility
                     "upload_date": r[2].isoformat() if r[2] else None,
                     "uploaded_by": r[3],
                     "status": r[4],
                     "processing_status": r[4],
-                    "total_rows": r[5]
+                    "total_rows": r[5],
+                    "records_count": r[6],  # Actual count from company_data table
+                    "processed_count": r[7],
+                    "failed_count": r[8]
                 })
 
             return {"files": files, "count": len(files)}
@@ -1847,6 +2139,220 @@ async def delete_file_and_data(file_id: str, session_id: str = ""):
     except Exception as e:
         logger.error(f"❌ Error deleting file {file_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete file: {str(e)}")
+
+
+# -------------------- Data Management endpoints --------------------
+
+@app.get("/api/files/view-data/{file_id}")
+async def view_file_data(file_id: str, session_id: str, limit: int = 100, offset: int = 0):
+    """View processed company data for a specific file with pagination"""
+    try:
+        # Verify session
+        verify_session(session_id)
+        
+        from database_config.postgresql_config import PostgreSQLConfig
+        import psycopg2
+        
+        db_config = PostgreSQLConfig()
+        connection_params = db_config.get_connection_params()
+        connection = psycopg2.connect(**connection_params)
+        cursor = connection.cursor()
+        
+        # Get file info first
+        cursor.execute(
+            """SELECT file_name, uploaded_by, upload_date, processing_status 
+               FROM file_upload WHERE id = %s""",
+            (file_id,)
+        )
+        file_info = cursor.fetchone()
+        
+        if not file_info:
+            cursor.close()
+            connection.close()
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        # Get total count
+        cursor.execute(
+            "SELECT COUNT(*) FROM company_data WHERE file_upload_id = %s",
+            (file_id,)
+        )
+        total_count = cursor.fetchone()[0]
+        
+        # Get paginated company data
+        cursor.execute(
+            """SELECT id, company_name, linkedin_url, company_website, 
+                      company_size, industry, revenue, processing_status, 
+                      upload_date, updated_at
+               FROM company_data 
+               WHERE file_upload_id = %s 
+               ORDER BY upload_date DESC
+               LIMIT %s OFFSET %s""",
+            (file_id, limit, offset)
+        )
+        
+        records = cursor.fetchall()
+        company_data = []
+        
+        for record in records:
+            company_data.append({
+                "id": record[0],
+                "company_name": record[1],
+                "linkedin_url": record[2],
+                "company_website": record[3],
+                "company_size": record[4],
+                "industry": record[5],
+                "revenue": record[6],
+                "processing_status": record[7] or "pending",
+                "created_at": record[8],  # This is actually upload_date from DB
+                "updated_at": record[9]
+            })
+        
+        cursor.close()
+        connection.close()
+        
+        return {
+            "success": True,
+            "data": company_data,
+            "total_records": total_count,
+            "file_info": {
+                "file_name": file_info[0],
+                "uploaded_by": file_info[1],
+                "upload_date": file_info[2],
+                "processing_status": file_info[3]
+            },
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "total": total_count
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error viewing data for file {file_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving data: {str(e)}")
+
+@app.put("/api/files/edit-data/{record_id}")
+async def edit_company_record(record_id: str, session_id: str, update_data: dict):
+    """Edit a specific company data record"""
+    try:
+        # Verify session
+        verify_session(session_id)
+        
+        from database_config.postgresql_config import PostgreSQLConfig
+        import psycopg2
+        from datetime import datetime
+        
+        db_config = PostgreSQLConfig()
+        connection_params = db_config.get_connection_params()
+        connection = psycopg2.connect(**connection_params)
+        cursor = connection.cursor()
+        
+        # Build dynamic update query
+        update_fields = []
+        update_values = []
+        
+        allowed_fields = ['company_name', 'linkedin_url', 'company_website', 'company_size', 'industry', 'revenue']
+        
+        for field, value in update_data.items():
+            if field in allowed_fields and value is not None:
+                update_fields.append(f"{field} = %s")
+                update_values.append(value)
+        
+        if not update_fields:
+            raise HTTPException(status_code=400, detail="No valid fields to update")
+        
+        # Add updated_at timestamp
+        update_fields.append("updated_at = %s")
+        update_values.append(datetime.now())
+        update_values.append(record_id)
+        
+        query = f"""
+            UPDATE company_data 
+            SET {', '.join(update_fields)}
+            WHERE id = %s
+            RETURNING id, company_name, linkedin_url, company_website, 
+                     company_size, industry, revenue, processing_status, 
+                     upload_date, updated_at
+        """
+        
+        cursor.execute(query, update_values)
+        updated_record = cursor.fetchone()
+        
+        if not updated_record:
+            cursor.close()
+            connection.close()
+            raise HTTPException(status_code=404, detail="Company record not found")
+        
+        connection.commit()
+        cursor.close()
+        connection.close()
+        
+        return {
+            "success": True,
+            "message": "Company record updated successfully",
+            "data": {
+                "id": updated_record[0],
+                "company_name": updated_record[1],
+                "linkedin_url": updated_record[2],
+                "company_website": updated_record[3],
+                "company_size": updated_record[4],
+                "industry": updated_record[5],
+                "revenue": updated_record[6],
+                "processing_status": updated_record[7],
+                "created_at": updated_record[8],  # This is actually upload_date from DB
+                "updated_at": updated_record[9]
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating company record {record_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error updating record: {str(e)}")
+
+@app.delete("/api/files/delete-record/{record_id}")
+async def delete_company_record(record_id: str, session_id: str):
+    """Delete a specific company data record"""
+    try:
+        # Verify session
+        verify_session(session_id)
+        
+        from database_config.postgresql_config import PostgreSQLConfig
+        import psycopg2
+        
+        db_config = PostgreSQLConfig()
+        connection_params = db_config.get_connection_params()
+        connection = psycopg2.connect(**connection_params)
+        cursor = connection.cursor()
+        
+        cursor.execute(
+            "DELETE FROM company_data WHERE id = %s RETURNING company_name",
+            (record_id,)
+        )
+        
+        deleted_record = cursor.fetchone()
+        
+        if not deleted_record:
+            cursor.close()
+            connection.close()
+            raise HTTPException(status_code=404, detail="Company record not found")
+        
+        connection.commit()
+        cursor.close()
+        connection.close()
+        
+        return {
+            "success": True,
+            "message": f"Company record '{deleted_record[0]}' deleted successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting company record {record_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error deleting record: {str(e)}")
 
 
 # -------------------- Scheduler control endpoints --------------------

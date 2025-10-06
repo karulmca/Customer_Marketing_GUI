@@ -24,6 +24,7 @@ import {
   DialogActions,
   FormControlLabel,
   Switch,
+  Checkbox,
   Alert,
   Snackbar,
   Accordion,
@@ -37,7 +38,10 @@ import {
   Menu,
   MenuItem,
   TextField,
-  Avatar
+  Avatar,
+  Tabs,
+  Tab,
+  TabPanel
 } from '@mui/material';
 import {
   CloudUpload as UploadIcon,
@@ -56,10 +60,45 @@ import {
   People as PeopleIcon,
   Edit as EditIcon,
   PersonAdd as PersonAddIcon,
-  MoreVert as MoreVertIcon
+  MoreVert as MoreVertIcon,
+  Folder as FolderIcon,
+  Visibility as ViewIcon,
+  Replay as RetryIcon,
+  DataUsage as DataIcon,
+  Home as HomeIcon,
+  TableChart as TableIcon
 } from '@mui/icons-material';
 import { useDropzone } from 'react-dropzone';
 import { FileService, DatabaseService } from '../services/AuthService';
+
+// Custom TabPanel component for tab content
+function CustomTabPanel(props) {
+  const { children, value, index, ...other } = props;
+
+  return (
+    <div
+      role="tabpanel"
+      hidden={value !== index}
+      id={`simple-tabpanel-${index}`}
+      aria-labelledby={`simple-tab-${index}`}
+      {...other}
+    >
+      {value === index && (
+        <Box sx={{ p: 3 }}>
+          {children}
+        </Box>
+      )}
+    </div>
+  );
+}
+
+// Tab accessibility props
+function a11yProps(index) {
+  return {
+    id: `simple-tab-${index}`,
+    'aria-controls': `simple-tabpanel-${index}`,
+  };
+}
 
 const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
   const [uploadedFile, setUploadedFile] = useState(null);
@@ -92,6 +131,23 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [userToDelete, setUserToDelete] = useState(null);
+
+  // Tab Management State
+  const [activeTab, setActiveTab] = useState(0);
+
+  // Data Management States
+  const [viewingData, setViewingData] = useState(null);
+  const [showViewDataDialog, setShowViewDataDialog] = useState(false);
+  const [editingData, setEditingData] = useState(null);
+  const [showEditDataDialog, setShowEditDataDialog] = useState(false);
+  const [editingRecord, setEditingRecord] = useState(null);
+  const [showRecordEditDialog, setShowRecordEditDialog] = useState(false);
+
+  // Confirmation Dialog States
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [confirmAction, setConfirmAction] = useState(null);
+  const [confirmMessage, setConfirmMessage] = useState('');
+  const [confirmTitle, setConfirmTitle] = useState('');
 
   // Define checkDatabaseStatus function first
   const checkDatabaseStatus = useCallback(async () => {
@@ -316,7 +372,25 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
   };
 
   // Handle processing a specific uploaded file
-  const handleProcessFile = async (fileId) => {
+  const handleProcessFile = async (fileId, isReprocess = false) => {
+    // Find the file to get its name for the confirmation dialog
+    const file = uploadedFiles.find(f => f.id === fileId);
+    const fileName = file?.filename || file?.file_name || 'this file';
+    
+    // Show confirmation dialog for reprocessing
+    if (isReprocess && file?.processing_status === 'completed') {
+      setConfirmTitle('Confirm Reprocessing');
+      setConfirmMessage(`Are you sure you want to reprocess "${fileName}"? This will update all existing data and may overwrite previous results.`);
+      setConfirmAction(() => () => executeProcessFile(fileId));
+      setShowConfirmDialog(true);
+      return;
+    }
+    
+    // For new processing (not reprocessing), execute directly
+    executeProcessFile(fileId);
+  };
+
+  const executeProcessFile = async (fileId) => {
     try {
       // Add file to processing set
       setProcessingFiles(prev => new Set([...prev, fileId]));
@@ -444,10 +518,13 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
   // Handle deleting file and all associated data
   const handleDeleteFile = async (fileId, fileName) => {
     // Show confirmation dialog
-    if (!window.confirm(`Are you sure you want to delete "${fileName}" and all its associated data? This action cannot be undone.`)) {
-      return;
-    }
+    setConfirmTitle('Confirm Deletion');
+    setConfirmMessage(`Are you sure you want to delete "${fileName}" and all its associated data? This action cannot be undone.`);
+    setConfirmAction(() => () => executeDeleteFile(fileId, fileName));
+    setShowConfirmDialog(true);
+  };
 
+  const executeDeleteFile = async (fileId, fileName) => {
     try {
       setError('');
       const result = await FileService.deleteFile(sessionId, fileId);
@@ -475,6 +552,139 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
       case 'failed': return <ErrorIcon />;
       case 'processing': return <ScheduleIcon />;
       default: return <ScheduleIcon />;
+    }
+  };
+
+  // Helper function to determine if operations should be disabled
+  const isOperationDisabled = (file) => {
+    return (
+      processingFiles.has(file.id) || 
+      file.processing_status === 'processing' || 
+      file.processing_status === 'pending' ||
+      !file.processing_status // If status is undefined/null, also disable
+    );
+  };
+
+
+
+  // Enhanced Data Management Functions
+  const handleViewData = async (file) => {
+    try {
+      setError('');
+      const fileId = file.id || file.file_id;
+      
+      const response = await fetch(API_ENDPOINTS.files.viewData(fileId, sessionId, 100, 0), {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        if (result.success) {
+          setViewingData({
+            file: file,
+            data: result.data,
+            totalRecords: result.total_records,
+            fileInfo: result.file_info
+          });
+          setShowViewDataDialog(true);
+          setSuccess(`Loaded ${result.data.length} records for viewing`);
+        } else {
+          throw new Error(result.message || 'Failed to load data');
+        }
+      } else {
+        throw new Error(`HTTP ${response.status}: Failed to fetch data`);
+      }
+    } catch (error) {
+      setError(`Failed to view data: ${error.message}`);
+    }
+  };
+
+  const handleEditData = async (file) => {
+    try {
+      setError('');
+      const fileId = file.id || file.file_id;
+      
+      const response = await fetch(API_ENDPOINTS.files.viewData(fileId, sessionId, 100, 0), {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        if (result.success) {
+          setEditingData({
+            file: file,
+            data: result.data,
+            totalRecords: result.total_records,
+            fileInfo: result.file_info
+          });
+          setShowEditDataDialog(true);
+          setSuccess(`Loaded ${result.data.length} records for editing`);
+        } else {
+          throw new Error(result.message || 'Failed to load data');
+        }
+      } else {
+        throw new Error(`HTTP ${response.status}: Failed to fetch data`);
+      }
+    } catch (error) {
+      setError(`Failed to load data for editing: ${error.message}`);
+    }
+  };
+
+  const handleDownload = async (fileId, filename) => {
+    try {
+      setError('');
+      const result = await FileService.downloadProcessed(sessionId, fileId);
+      
+      // Create blob and download
+      const blob = new Blob([result], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `processed_${filename}`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      
+      setSuccess(`Downloaded processed file: ${filename}`);
+    } catch (error) {
+      setError(`Failed to download processed file: ${error.message}`);
+    }
+  };
+
+  const handleRetryProcessing = async (fileId, fileName) => {
+    if (!window.confirm(`Retry processing for "${fileName}"?`)) {
+      return;
+    }
+
+    try {
+      setError('');
+      setProcessingFiles(prev => new Set([...prev, fileId]));
+      
+      // Call the process endpoint
+      const result = await FileService.processFile(sessionId, fileId);
+      
+      if (result.success) {
+        setSuccess(`Processing started for "${fileName}"`);
+        // Refresh file list to show updated status
+        loadUploadedFiles();
+      } else {
+        setError(result.message || 'Failed to start processing');
+      }
+    } catch (error) {
+      setError(`Failed to retry processing: ${error.message}`);
+    } finally {
+      setProcessingFiles(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(fileId);
+        return newSet;
+      });
     }
   };
 
@@ -526,8 +736,15 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
 
   const handleSaveUser = async () => {
     try {
-      const response = await fetch(API_ENDPOINTS.auth.updateUser(sessionId), {
-        method: 'PUT',
+      const isNewUser = !editingUser?.id;
+      const endpoint = isNewUser ? 
+        API_ENDPOINTS.auth.createUser(sessionId) : 
+        API_ENDPOINTS.auth.updateUser(sessionId);
+      
+      const method = isNewUser ? 'POST' : 'PUT';
+      
+      const response = await fetch(endpoint, {
+        method: method,
         headers: {
           'Content-Type': 'application/json'
         },
@@ -535,15 +752,16 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
       });
       
       if (response.ok) {
-        setSuccess('User updated successfully');
+        setSuccess(isNewUser ? 'User created successfully' : 'User updated successfully');
         setShowEditDialog(false);
         setEditingUser(null);
         loadUsers();
       } else {
-        throw new Error('Failed to update user');
+        const errorData = await response.json();
+        throw new Error(errorData.detail || (isNewUser ? 'Failed to create user' : 'Failed to update user'));
       }
     } catch (error) {
-      setError('Failed to update user: ' + error.message);
+      setError((editingUser?.id ? 'Failed to update user: ' : 'Failed to create user: ') + error.message);
     }
   };
 
@@ -567,6 +785,11 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
     } catch (error) {
       setError('Failed to delete user: ' + error.message);
     }
+  };
+
+  const handleAddUser = () => {
+    setEditingUser({ username: '', email: '', password: '', role: 'user' });
+    setShowEditDialog(true);
   };
 
   return (
@@ -1023,8 +1246,39 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
           </Grid>
         </Grid>
 
-        {/* File Upload Section - Original GUI Workflow */}
-        <Grid container spacing={3} sx={{ alignItems: 'flex-start' }}>
+        {/* Tabs Navigation */}
+        <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
+          <Tabs 
+            value={activeTab} 
+            onChange={(event, newValue) => setActiveTab(newValue)}
+            aria-label="main navigation tabs"
+            sx={{ 
+              '& .MuiTab-root': {
+                textTransform: 'none',
+                fontSize: '1rem',
+                fontWeight: 500
+              }
+            }}
+          >
+            <Tab 
+              icon={<HomeIcon />} 
+              label="File Upload" 
+              {...a11yProps(0)}
+              sx={{ minHeight: 64 }}
+            />
+            <Tab 
+              icon={<FolderIcon />} 
+              label="Uploaded Files & Data Management" 
+              {...a11yProps(1)}
+              sx={{ minHeight: 64 }}
+            />
+          </Tabs>
+        </Box>
+
+        {/* Tab Content */}
+        <CustomTabPanel value={activeTab} index={0}>
+          {/* File Upload Section - Original GUI Workflow */}
+          <Grid container spacing={3} sx={{ alignItems: 'flex-start' }}>
           <Grid item xs={12} md={6}>
             <Card sx={{ height: 'fit-content' }}>
               <CardContent>
@@ -1532,6 +1786,202 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
             </CardContent>
           </Card>
         )}
+        </CustomTabPanel>
+
+        {/* Second Tab - Uploaded Files & Data Management */}
+        <CustomTabPanel value={activeTab} index={1}>
+          <Grid container spacing={3}>
+            <Grid item xs={12}>
+              <Card>
+                <CardContent>
+                  <Box display="flex" alignItems="center" gap={2} sx={{ mb: 3 }}>
+                    <TableIcon color="primary" />
+                    <Box sx={{ flexGrow: 1 }}>
+                      <Typography variant="h5">Data Management & Analysis</Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        View, edit, delete and retry processing for uploaded files and processed data
+                      </Typography>
+                    </Box>
+                  </Box>
+
+                  {/* Enhanced File Management Table */}
+                  {uploadedFiles && uploadedFiles.length > 0 ? (
+                    <Box sx={{ width: '100%', overflow: 'auto' }}>
+                      <Table size="medium" sx={{ minWidth: 1000 }}>
+                        <TableHead>
+                          <TableRow sx={{ backgroundColor: 'grey.50' }}>
+                            <TableCell><strong>File Details</strong></TableCell>
+                            <TableCell><strong>Processing Status</strong></TableCell>
+                            <TableCell><strong>Data Statistics</strong></TableCell>
+                            <TableCell><strong>Actions</strong></TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {uploadedFiles.map((file) => (
+                            <TableRow key={file.id} hover sx={{ '&:hover': { backgroundColor: 'grey.25' } }}>
+                              <TableCell>
+                                <Box>
+                                  <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 0.5 }}>
+                                    {file.file_name || file.filename}
+                                  </Typography>
+                                  <Typography variant="body2" color="text.secondary">
+                                    📅 Uploaded: {new Date(file.upload_date || file.uploadDate).toLocaleString()}
+                                  </Typography>
+                                  <Typography variant="body2" color="text.secondary">
+                                    👤 By: {file.uploaded_by || file.uploadedBy}
+                                  </Typography>
+                                  <Typography variant="body2" color="text.secondary">
+                                    📊 Records: {file.records_count || file.recordsCount || 0}
+                                  </Typography>
+                                </Box>
+                              </TableCell>
+                              
+                              <TableCell>
+                                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                                  <Chip
+                                    label={processingFiles.has(file.id) ? 'Processing...' : 
+                                           file.processing_status === 'completed' ? 'Completed' :
+                                           file.processing_status === 'failed' ? 'Failed' :
+                                           file.processing_status === 'processing' ? 'Processing' :
+                                           'Pending'}
+                                    color={processingFiles.has(file.id) || file.processing_status === 'processing' ? 'warning' :
+                                           file.processing_status === 'completed' ? 'success' :
+                                           file.processing_status === 'failed' ? 'error' : 'default'}
+                                    size="small"
+                                    icon={processingFiles.has(file.id) || file.processing_status === 'processing' ? <ScheduleIcon /> :
+                                          file.processing_status === 'completed' ? <CheckIcon /> :
+                                          file.processing_status === 'failed' ? <ErrorIcon /> : <InfoIcon />}
+                                  />
+                                  {file.error_message && (
+                                    <Typography variant="caption" color="error" sx={{ fontSize: '0.7rem', maxWidth: 200 }}>
+                                      ⚠️ {file.error_message}
+                                    </Typography>
+                                  )}
+                                </Box>
+                              </TableCell>
+                              
+                              <TableCell>
+                                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                                  <Typography variant="body2">
+                                    📈 Total: {file.records_count || 0}
+                                  </Typography>
+                                  <Typography variant="body2" color="success.main">
+                                    ✅ Processed: {file.processed_count || 0}
+                                  </Typography>
+                                  <Typography variant="body2" color="error.main">
+                                    ❌ Failed: {file.failed_count || 0}
+                                  </Typography>
+                                  {file.processing_status === 'completed' && (
+                                    <Typography variant="caption" color="text.secondary">
+                                      🎯 Success Rate: {((file.processed_count || 0) / (file.records_count || 1) * 100).toFixed(1)}%
+                                    </Typography>
+                                  )}
+                                </Box>
+                              </TableCell>
+                              
+                              <TableCell>
+                                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 200 }}>
+                                  {/* View Data Button */}
+                                  <Button
+                                    size="small"
+                                    variant="outlined"
+                                    startIcon={<ViewIcon />}
+                                    onClick={() => handleViewData(file)}
+                                    disabled={isOperationDisabled(file)}
+                                    sx={{ justifyContent: 'flex-start' }}
+                                  >
+                                    View Data
+                                  </Button>
+                                  
+                                  {/* Download Processed Button */}
+                                  {file.processing_status === 'completed' && (
+                                    <Button
+                                      size="small"
+                                      variant="outlined"
+                                      color="success"
+                                      startIcon={<DownloadIcon />}
+                                      onClick={() => handleDownload(file.id, file.file_name || file.filename)}
+                                      disabled={isOperationDisabled(file)}
+                                      sx={{ justifyContent: 'flex-start' }}
+                                    >
+                                      Download Results
+                                    </Button>
+                                  )}
+                                  
+                                  {/* Edit Data Button */}
+                                  <Button
+                                    size="small"
+                                    variant="outlined"
+                                    color="info"
+                                    startIcon={<EditIcon />}
+                                    onClick={() => handleEditData(file)}
+                                    disabled={isOperationDisabled(file)}
+                                    sx={{ justifyContent: 'flex-start' }}
+                                  >
+                                    Edit Data
+                                  </Button>
+                                  
+                                  {/* Process/Retry Button */}
+                                  <Button
+                                    size="small"
+                                    variant="contained"
+                                    color={file.processing_status === 'failed' ? 'warning' : 'primary'}
+                                    startIcon={file.processing_status === 'failed' ? <RetryIcon /> : <AssessmentIcon />}
+                                    onClick={() => file.processing_status === 'failed' ? 
+                                      handleRetryProcessing(file.id, file.file_name || file.filename) : 
+                                      handleProcessFile(file.id, file.processing_status === 'completed')}
+                                    disabled={isOperationDisabled(file)}
+                                    sx={{ justifyContent: 'flex-start' }}
+                                  >
+                                    {processingFiles.has(file.id) || file.processing_status === 'processing' ? 'Processing...' :
+                                     file.processing_status === 'failed' ? 'Retry Processing' : 
+                                     file.processing_status === 'completed' ? 'Reprocess' : 
+                                     file.processing_status === 'pending' ? 'Pending...' : 'Process Now'}
+                                  </Button>
+                                  
+                                  {/* Delete Button */}
+                                  <Button
+                                    size="small"
+                                    variant="outlined"
+                                    color="error"
+                                    startIcon={<DeleteIcon />}
+                                    onClick={() => handleDeleteFile(file.id, file.file_name || file.filename)}
+                                    disabled={isOperationDisabled(file)}
+                                    sx={{ justifyContent: 'flex-start' }}
+                                  >
+                                    Delete All Data
+                                  </Button>
+                                </Box>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </Box>
+                  ) : (
+                    <Box sx={{ textAlign: 'center', py: 6 }}>
+                      <DataIcon sx={{ fontSize: 60, color: 'grey.300', mb: 2 }} />
+                      <Typography variant="h6" color="text.secondary" gutterBottom>
+                        No Data Available
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                        Upload files in the "File Upload" tab to see data management options here.
+                      </Typography>
+                      <Button 
+                        variant="outlined" 
+                        onClick={() => setActiveTab(0)}
+                        startIcon={<UploadIcon />}
+                      >
+                        Go to File Upload
+                      </Button>
+                    </Box>
+                  )}
+                </CardContent>
+              </Card>
+            </Grid>
+          </Grid>
+        </CustomTabPanel>
+
       </Box>
 
       {/* Processing Options Dialog */}
@@ -1590,11 +2040,7 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
               startIcon={<PersonAddIcon />}
               variant="outlined"
               size="small"
-              onClick={() => {
-                // Add new user functionality
-                setEditingUser({ username: '', email: '', role: 'user' });
-                setShowEditDialog(true);
-              }}
+              onClick={handleAddUser}
             >
               Add User
             </Button>
@@ -1608,6 +2054,7 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
                 <TableCell>Username</TableCell>
                 <TableCell>Email</TableCell>
                 <TableCell>Role</TableCell>
+                <TableCell>Status</TableCell>
                 <TableCell>Created Date</TableCell>
                 <TableCell>Actions</TableCell>
               </TableRow>
@@ -1634,7 +2081,16 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
                     <Chip 
                       label={user.role || 'user'} 
                       size="small"
-                      color={user.role === 'admin' ? 'primary' : 'default'}
+                      color={user.role === 'superuser' ? 'error' : 
+                             user.role === 'admin' ? 'primary' : 'default'}
+                      variant={user.role === 'superuser' ? 'filled' : 'outlined'}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Chip 
+                      label={user.is_active === false ? 'Inactive' : 'Active'} 
+                      size="small"
+                      color={user.is_active === false ? 'error' : 'success'}
                       variant="outlined"
                     />
                   </TableCell>
@@ -1670,7 +2126,7 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
               ))}
               {users.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} align="center">
+                  <TableCell colSpan={7} align="center">
                     <Typography variant="body2" color="text.secondary">
                       No users found
                     </Typography>
@@ -1718,7 +2174,35 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
             >
               <option value="user">User</option>
               <option value="admin">Admin</option>
+              <option value="superuser">Superuser</option>
             </TextField>
+            
+            {/* Status Checkboxes */}
+            <Box sx={{ mt: 2 }}>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>Status Options</Typography>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={editingUser?.is_active !== false}
+                    onChange={(e) => setEditingUser(prev => ({ ...prev, is_active: e.target.checked }))}
+                    color="success"
+                  />
+                }
+                label="Active User"
+              />
+              {editingUser?.role === 'superuser' && (
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={editingUser?.is_superuser || false}
+                      onChange={(e) => setEditingUser(prev => ({ ...prev, is_superuser: e.target.checked }))}
+                      color="error"
+                    />
+                  }
+                  label="Superuser Privileges"
+                />
+              )}
+            </Box>
             {!editingUser?.id && (
               <TextField
                 label="Password"
@@ -1755,6 +2239,262 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
         </DialogActions>
       </Dialog>
 
+      {/* View Data Dialog */}
+      <Dialog 
+        open={showViewDataDialog} 
+        onClose={() => setShowViewDataDialog(false)}
+        maxWidth="lg"
+        fullWidth
+      >
+        <DialogTitle>
+          View Company Data - {viewingData?.fileInfo?.file_name}
+        </DialogTitle>
+        <DialogContent>
+          {viewingData && (
+            <Box>
+              <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
+                Showing {viewingData.data?.length || 0} of {viewingData.totalRecords} records
+              </Typography>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Company Name</TableCell>
+                    <TableCell>LinkedIn URL</TableCell>
+                    <TableCell>Website</TableCell>
+                    <TableCell>Company Size</TableCell>
+                    <TableCell>Industry</TableCell>
+                    <TableCell>Revenue</TableCell>
+                    <TableCell>Status</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {viewingData.data?.map((record, index) => (
+                    <TableRow key={record.id || index}>
+                      <TableCell>{record.company_name}</TableCell>
+                      <TableCell>
+                        {record.linkedin_url ? (
+                          <a href={record.linkedin_url} target="_blank" rel="noopener noreferrer">
+                            {record.linkedin_url.length > 30 ? 
+                              record.linkedin_url.substring(0, 30) + '...' : 
+                              record.linkedin_url
+                            }
+                          </a>
+                        ) : '-'}
+                      </TableCell>
+                      <TableCell>
+                        {record.company_website ? (
+                          <a href={record.company_website} target="_blank" rel="noopener noreferrer">
+                            {record.company_website.length > 30 ? 
+                              record.company_website.substring(0, 30) + '...' : 
+                              record.company_website
+                            }
+                          </a>
+                        ) : '-'}
+                      </TableCell>
+                      <TableCell>{record.company_size || '-'}</TableCell>
+                      <TableCell>{record.industry || '-'}</TableCell>
+                      <TableCell>{record.revenue || '-'}</TableCell>
+                      <TableCell>
+                        <Chip 
+                          label={record.processing_status || 'pending'} 
+                          color={getStatusColor(record.processing_status)} 
+                          size="small"
+                        />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowViewDataDialog(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Edit Data Dialog */}
+      <Dialog 
+        open={showEditDataDialog} 
+        onClose={() => setShowEditDataDialog(false)}
+        maxWidth="lg"
+        fullWidth
+      >
+        <DialogTitle>
+          Edit Company Data - {editingData?.fileInfo?.file_name}
+        </DialogTitle>
+        <DialogContent>
+          {editingData && (
+            <Box>
+              <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
+                Editing {editingData.data?.length || 0} of {editingData.totalRecords} records
+              </Typography>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Company Name</TableCell>
+                    <TableCell>LinkedIn URL</TableCell>
+                    <TableCell>Website</TableCell>
+                    <TableCell>Company Size</TableCell>
+                    <TableCell>Industry</TableCell>
+                    <TableCell>Revenue</TableCell>
+                    <TableCell>Status</TableCell>
+                    <TableCell>Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {editingData.data?.map((record, index) => (
+                    <TableRow key={record.id || index}>
+                      <TableCell>{record.company_name}</TableCell>
+                      <TableCell>
+                        {record.linkedin_url ? (
+                          <a href={record.linkedin_url} target="_blank" rel="noopener noreferrer">
+                            {record.linkedin_url.length > 30 ? 
+                              record.linkedin_url.substring(0, 30) + '...' : 
+                              record.linkedin_url
+                            }
+                          </a>
+                        ) : '-'}
+                      </TableCell>
+                      <TableCell>
+                        {record.company_website ? (
+                          <a href={record.company_website} target="_blank" rel="noopener noreferrer">
+                            {record.company_website.length > 30 ? 
+                              record.company_website.substring(0, 30) + '...' : 
+                              record.company_website
+                            }
+                          </a>
+                        ) : '-'}
+                      </TableCell>
+                      <TableCell>{record.company_size || '-'}</TableCell>
+                      <TableCell>{record.industry || '-'}</TableCell>
+                      <TableCell>{record.revenue || '-'}</TableCell>
+                      <TableCell>
+                        <Chip 
+                          label={record.processing_status || 'pending'} 
+                          color={getStatusColor(record.processing_status)} 
+                          size="small"
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          size="small"
+                          startIcon={<EditIcon />}
+                          onClick={() => {
+                            setEditingRecord(record);
+                            setShowRecordEditDialog(true);
+                          }}
+                        >
+                          Edit
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowEditDataDialog(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Edit Record Dialog */}
+      <Dialog 
+        open={showRecordEditDialog} 
+        onClose={() => setShowRecordEditDialog(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Edit Company Record</DialogTitle>
+        <DialogContent>
+          {editingRecord && (
+            <Box sx={{ pt: 1 }}>
+              <TextField
+                fullWidth
+                label="Company Name"
+                value={editingRecord.company_name || ''}
+                onChange={(e) => setEditingRecord({...editingRecord, company_name: e.target.value})}
+                margin="normal"
+              />
+              <TextField
+                fullWidth
+                label="LinkedIn URL"
+                value={editingRecord.linkedin_url || ''}
+                onChange={(e) => setEditingRecord({...editingRecord, linkedin_url: e.target.value})}
+                margin="normal"
+              />
+              <TextField
+                fullWidth
+                label="Company Website"
+                value={editingRecord.company_website || ''}
+                onChange={(e) => setEditingRecord({...editingRecord, company_website: e.target.value})}
+                margin="normal"
+              />
+              <TextField
+                fullWidth
+                label="Company Size"
+                value={editingRecord.company_size || ''}
+                onChange={(e) => setEditingRecord({...editingRecord, company_size: e.target.value})}
+                margin="normal"
+              />
+              <TextField
+                fullWidth
+                label="Industry"
+                value={editingRecord.industry || ''}
+                onChange={(e) => setEditingRecord({...editingRecord, industry: e.target.value})}
+                margin="normal"
+              />
+              <TextField
+                fullWidth
+                label="Revenue"
+                value={editingRecord.revenue || ''}
+                onChange={(e) => setEditingRecord({...editingRecord, revenue: e.target.value})}
+                margin="normal"
+              />
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowRecordEditDialog(false)}>Cancel</Button>
+          <Button 
+            onClick={async () => {
+              try {
+                const response = await fetch(API_ENDPOINTS.files.editRecord(editingRecord.id, sessionId), {
+                  method: 'PUT',
+                  headers: {
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify(editingRecord)
+                });
+                
+                if (response.ok) {
+                  const result = await response.json();
+                  if (result.success) {
+                    setSuccess('Record updated successfully');
+                    setShowRecordEditDialog(false);
+                    setEditingRecord(null);
+                    // Refresh the edit dialog data
+                    handleEditData(editingData.file);
+                  } else {
+                    throw new Error(result.message || 'Failed to update record');
+                  }
+                } else {
+                  throw new Error(`HTTP ${response.status}: Failed to update record`);
+                }
+              } catch (error) {
+                setError(`Failed to update record: ${error.message}`);
+              }
+            }}
+            color="primary" 
+            variant="contained"
+          >
+            Save Changes
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       {/* Snackbar notifications */}
       <Snackbar
         open={!!error}
@@ -1777,6 +2517,58 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
           {success}
         </Alert>
       </Snackbar>
+
+      {/* Confirmation Dialog */}
+      <Dialog
+        open={showConfirmDialog}
+        onClose={() => setShowConfirmDialog(false)}
+        aria-labelledby="confirm-dialog-title"
+        aria-describedby="confirm-dialog-description"
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle 
+          id="confirm-dialog-title"
+          sx={{ 
+            color: 'error.main',
+            fontWeight: 'bold',
+            pb: 1
+          }}
+        >
+          ⚠️ {confirmTitle}
+        </DialogTitle>
+        <DialogContent>
+          <Typography 
+            id="confirm-dialog-description"
+            variant="body1"
+            sx={{ mt: 1 }}
+          >
+            {confirmMessage}
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ p: 2, gap: 1 }}>
+          <Button
+            onClick={() => setShowConfirmDialog(false)}
+            color="inherit"
+            variant="outlined"
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={() => {
+              setShowConfirmDialog(false);
+              if (confirmAction) {
+                confirmAction();
+              }
+            }}
+            color="error"
+            variant="contained"
+            autoFocus
+          >
+            Confirm
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Fixed Footer */}
       <Box
