@@ -15,6 +15,10 @@ export const API_ENDPOINTS = {
   files: {
     validateHeaders: (sessionId) => `${API_BASE_URL}/files/validate-headers?session_id=${sessionId}`,
     downloadProcessed: (fileId, sessionId) => `${API_BASE_URL}/files/download-processed/${fileId}?session_id=${sessionId}`,
+    viewData: (fileId, sessionId, limit = 100, offset = 0) => `${API_BASE_URL}/files/view-data/${fileId}?session_id=${sessionId}&limit=${limit}&offset=${offset}`,
+    editRecord: (recordId, sessionId) => `${API_BASE_URL}/files/edit-data/${recordId}?session_id=${sessionId}`,
+    deleteRecord: (recordId, sessionId) => `${API_BASE_URL}/files/delete-record/${recordId}?session_id=${sessionId}`,
+    reprocess: (fileId, sessionId) => `${API_BASE_URL}/files/process/${fileId}?session_id=${sessionId}`,
   },
   
   // Template endpoints
