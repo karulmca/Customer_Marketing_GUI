@@ -1581,6 +1581,93 @@ async def get_uploaded_files(session_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get uploaded files: {str(e)}")
 
+@app.delete("/api/files/{file_id}")
+async def delete_file_and_data(file_id: str, session_id: str = ""):
+    """Delete file and all associated data from all tables (file_upload, processing_jobs, company_data)"""
+    try:
+        # Verify session
+        verify_session(session_id)
+        
+        from database_config.postgresql_config import PostgreSQLConfig
+        import psycopg2
+        
+        db_config = PostgreSQLConfig()
+        connection_params = db_config.get_connection_params()
+        connection = psycopg2.connect(**connection_params)
+        connection.autocommit = False  # Use transaction
+        
+        try:
+            cursor = connection.cursor()
+            
+            # First, check if the file exists and get its info
+            cursor.execute(
+                "SELECT file_name, uploaded_by FROM file_upload WHERE id = %s",
+                (file_id,)
+            )
+            file_info = cursor.fetchone()
+            
+            if not file_info:
+                raise HTTPException(status_code=404, detail="File not found")
+            
+            file_name, uploaded_by = file_info
+            logger.info(f"🗑️ Deleting file and data: {file_name} (ID: {file_id})")
+            
+            # Delete from company_data table (linked by file_upload_id)
+            cursor.execute(
+                "DELETE FROM company_data WHERE file_upload_id = %s",
+                (file_id,)
+            )
+            company_data_deleted = cursor.rowcount
+            logger.info(f"🗑️ Deleted {company_data_deleted} records from company_data")
+            
+            # Delete from processing_jobs table (linked by file_upload_id)
+            cursor.execute(
+                "DELETE FROM processing_jobs WHERE file_upload_id = %s",
+                (file_id,)
+            )
+            processing_jobs_deleted = cursor.rowcount
+            logger.info(f"🗑️ Deleted {processing_jobs_deleted} records from processing_jobs")
+            
+            # Finally delete from file_upload table
+            cursor.execute(
+                "DELETE FROM file_upload WHERE id = %s",
+                (file_id,)
+            )
+            file_upload_deleted = cursor.rowcount
+            
+            if file_upload_deleted == 0:
+                connection.rollback()
+                raise HTTPException(status_code=404, detail="File not found")
+            
+            # Commit the transaction
+            connection.commit()
+            logger.info(f"✅ Successfully deleted file: {file_name} and all associated data")
+            
+            cursor.close()
+            connection.close()
+            
+            return {
+                "success": True,
+                "message": f"File '{file_name}' and all associated data deleted successfully",
+                "deleted_counts": {
+                    "file_upload": file_upload_deleted,
+                    "processing_jobs": processing_jobs_deleted,
+                    "company_data": company_data_deleted
+                }
+            }
+            
+        except Exception as e:
+            connection.rollback()
+            cursor.close()
+            connection.close()
+            raise e
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error deleting file {file_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete file: {str(e)}")
+
 
 # -------------------- Scheduler control endpoints --------------------
 @app.post("/api/jobs/process-pending")

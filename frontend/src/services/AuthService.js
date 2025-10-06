@@ -186,6 +186,17 @@ export const FileService = {
     } catch (error) {
       throw new Error(error.response?.data?.detail || 'Failed to get uploaded files');
     }
+  },
+
+  async deleteFile(sessionId, fileId) {
+    try {
+      const response = await api.delete(`/files/${fileId}`, {
+        params: { session_id: sessionId }
+      });
+      return response.data;
+    } catch (error) {
+      throw new Error(error.response?.data?.detail || 'Failed to delete file');
+    }
   }
 };
 

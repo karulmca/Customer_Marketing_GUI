@@ -47,7 +47,8 @@ import {
   Download as DownloadIcon,
   GetApp as GetAppIcon,
   ExpandMore as ExpandMoreIcon,
-  Info as InfoIcon
+  Info as InfoIcon,
+  Delete as DeleteIcon
 } from '@mui/icons-material';
 import { useDropzone } from 'react-dropzone';
 import { FileService, DatabaseService } from '../services/AuthService';
@@ -420,6 +421,25 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
       setSuccess(`Processed file downloaded successfully: processed_${fileName}`);
     } catch (error) {
       setError(`Failed to download processed file: ${error.message}`);
+    }
+  };
+
+  // Handle deleting file and all associated data
+  const handleDeleteFile = async (fileId, fileName) => {
+    // Show confirmation dialog
+    if (!window.confirm(`Are you sure you want to delete "${fileName}" and all its associated data? This action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      setError('');
+      const result = await FileService.deleteFile(sessionId, fileId);
+      setSuccess(result.message || `File "${fileName}" deleted successfully`);
+      
+      // Refresh the file list
+      loadUploadedFiles();
+    } catch (error) {
+      setError(`Failed to delete file: ${error.message}`);
     }
   };
 
@@ -1221,31 +1241,52 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
                             <TableCell align="center">
                               <Box display="flex" gap={1} justifyContent="center">
                                 {file.processing_status === 'completed' ? (
-                                  <Button
-                                    variant="contained"
-                                    size="small"
-                                    color="success"
-                                    startIcon={<DownloadIcon />}
-                                    onClick={() => handleDownloadProcessedFile(file.id, file.file_name || file.filename)}
-                                  >
-                                    Download
-                                  </Button>
+                                  <>
+                                    <Button
+                                      variant="contained"
+                                      size="small"
+                                      color="success"
+                                      startIcon={<DownloadIcon />}
+                                      onClick={() => handleDownloadProcessedFile(file.id, file.file_name || file.filename)}
+                                    >
+                                      Download
+                                    </Button>
+                                    <IconButton
+                                      size="small"
+                                      color="error"
+                                      onClick={() => handleDeleteFile(file.id, file.file_name || file.filename)}
+                                      title="Delete file and all associated data"
+                                    >
+                                      <DeleteIcon />
+                                    </IconButton>
+                                  </>
                                 ) : (
-                                  <Button
-                                    variant="contained"
-                                    size="small"
-                                    onClick={() => handleProcessFile(file.id)}
-                                    disabled={
-                                      processingFiles.has(file.id) || 
-                                      file.processing_status === 'processing'
-                                    }
-                                    color={
-                                      file.processing_status === 'failed' ? 'error' : 'primary'
-                                    }
-                                  >
-                                    {processingFiles.has(file.id) || file.processing_status === 'processing' ? 'Processing...' :
-                                     file.processing_status === 'failed' ? 'Retry' : 'Process'}
-                                  </Button>
+                                  <>
+                                    <Button
+                                      variant="contained"
+                                      size="small"
+                                      onClick={() => handleProcessFile(file.id)}
+                                      disabled={
+                                        processingFiles.has(file.id) || 
+                                        file.processing_status === 'processing'
+                                      }
+                                      color={
+                                        file.processing_status === 'failed' ? 'error' : 'primary'
+                                      }
+                                    >
+                                      {processingFiles.has(file.id) || file.processing_status === 'processing' ? 'Processing...' :
+                                       file.processing_status === 'failed' ? 'Retry' : 'Process'}
+                                    </Button>
+                                    <IconButton
+                                      size="small"
+                                      color="error"
+                                      onClick={() => handleDeleteFile(file.id, file.file_name || file.filename)}
+                                      title="Delete file and all associated data"
+                                      disabled={processingFiles.has(file.id) || file.processing_status === 'processing'}
+                                    >
+                                      <DeleteIcon />
+                                    </IconButton>
+                                  </>
                                 )}
                               </Box>
                             </TableCell>
