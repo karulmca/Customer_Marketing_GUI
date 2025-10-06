@@ -33,7 +33,11 @@ import {
   ListItem,
   ListItemText,
   ListItemIcon,
-  Tooltip
+  Tooltip,
+  Menu,
+  MenuItem,
+  TextField,
+  Avatar
 } from '@mui/material';
 import {
   CloudUpload as UploadIcon,
@@ -48,7 +52,11 @@ import {
   GetApp as GetAppIcon,
   ExpandMore as ExpandMoreIcon,
   Info as InfoIcon,
-  Delete as DeleteIcon
+  Delete as DeleteIcon,
+  People as PeopleIcon,
+  Edit as EditIcon,
+  PersonAdd as PersonAddIcon,
+  MoreVert as MoreVertIcon
 } from '@mui/icons-material';
 import { useDropzone } from 'react-dropzone';
 import { FileService, DatabaseService } from '../services/AuthService';
@@ -75,6 +83,15 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
   const [refreshing, setRefreshing] = useState(false); // Track when auto-refresh is happening
   const [nextJobCountdown, setNextJobCountdown] = useState(120); // Countdown in seconds (2 minutes)
   const [lastJobCheck, setLastJobCheck] = useState(Date.now()); // Track when we last checked for jobs
+  
+  // User Management States
+  const [userMenuAnchor, setUserMenuAnchor] = useState(null);
+  const [showUserManagement, setShowUserManagement] = useState(false);
+  const [users, setUsers] = useState([]);
+  const [editingUser, setEditingUser] = useState(null);
+  const [showEditDialog, setShowEditDialog] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [userToDelete, setUserToDelete] = useState(null);
 
   // Define checkDatabaseStatus function first
   const checkDatabaseStatus = useCallback(async () => {
@@ -461,9 +478,101 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
     }
   };
 
+  // User Management Functions
+  const loadUsers = useCallback(async () => {
+    try {
+      const response = await fetch(API_ENDPOINTS.auth.getUsers(sessionId), {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        setUsers(result.users || []);
+      } else {
+        throw new Error('Failed to load users');
+      }
+    } catch (error) {
+      console.error('Error loading users:', error);
+      setError('Failed to load users: ' + error.message);
+    }
+  }, [sessionId]);
+
+  const handleUserMenuClick = (event) => {
+    setUserMenuAnchor(event.currentTarget);
+  };
+
+  const handleUserMenuClose = () => {
+    setUserMenuAnchor(null);
+  };
+
+  const handleShowUserManagement = () => {
+    setShowUserManagement(true);
+    setUserMenuAnchor(null);
+    loadUsers();
+  };
+
+  const handleEditUser = (user) => {
+    setEditingUser({ ...user });
+    setShowEditDialog(true);
+  };
+
+  const handleDeleteUser = (user) => {
+    setUserToDelete(user);
+    setShowDeleteDialog(true);
+  };
+
+  const handleSaveUser = async () => {
+    try {
+      const response = await fetch(API_ENDPOINTS.auth.updateUser(sessionId), {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(editingUser)
+      });
+      
+      if (response.ok) {
+        setSuccess('User updated successfully');
+        setShowEditDialog(false);
+        setEditingUser(null);
+        loadUsers();
+      } else {
+        throw new Error('Failed to update user');
+      }
+    } catch (error) {
+      setError('Failed to update user: ' + error.message);
+    }
+  };
+
+  const handleConfirmDeleteUser = async () => {
+    try {
+      const response = await fetch(API_ENDPOINTS.auth.deleteUser(sessionId, userToDelete.id), {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (response.ok) {
+        setSuccess('User deleted successfully');
+        setShowDeleteDialog(false);
+        setUserToDelete(null);
+        loadUsers();
+      } else {
+        throw new Error('Failed to delete user');
+      }
+    } catch (error) {
+      setError('Failed to delete user: ' + error.message);
+    }
+  };
+
   return (
     <Box sx={{ 
       flexGrow: 1,
+      pb: 8, // Add bottom padding to prevent content from being hidden behind fixed footer
       '@keyframes pulse': {
         '0%': { opacity: 1 },
         '50%': { opacity: 0.5 },
@@ -508,6 +617,32 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
               <RefreshIcon sx={refreshing ? { animation: 'spin 1s linear infinite' } : {}} />
             </IconButton>
           </Tooltip>
+          
+          {/* User Management Menu */}
+          <Tooltip title="User Management">
+            <IconButton color="inherit" onClick={handleUserMenuClick}>
+              <PeopleIcon />
+            </IconButton>
+          </Tooltip>
+          <Menu
+            anchorEl={userMenuAnchor}
+            open={Boolean(userMenuAnchor)}
+            onClose={handleUserMenuClose}
+            anchorOrigin={{
+              vertical: 'bottom',
+              horizontal: 'right',
+            }}
+            transformOrigin={{
+              vertical: 'top',
+              horizontal: 'right',
+            }}
+          >
+            <MenuItem onClick={handleShowUserManagement}>
+              <PeopleIcon sx={{ mr: 1 }} />
+              Manage Users
+            </MenuItem>
+          </Menu>
+          
           <IconButton color="inherit" onClick={onLogout}>
             <LogoutIcon />
           </IconButton>
@@ -585,15 +720,66 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
                 <Box display="flex" alignItems="center" gap={2} sx={{ mb: 2 }}>
                   <ScheduleIcon color="primary" />
                   <Box sx={{ flexGrow: 1 }}>
-                    <Box display="flex" alignItems="center" gap={1}>
-                      <Typography variant="h6">Processing Status</Typography>
-                      {refreshing && (
-                        <Tooltip title="Auto-refreshing data...">
-                          <Typography sx={{ fontSize: '0.8rem', color: 'text.secondary', animation: 'pulse 1.5s infinite' }}>
-                            🔄
-                          </Typography>
-                        </Tooltip>
-                      )}
+                    <Box display="flex" alignItems="center" justifyContent="space-between">
+                      <Box display="flex" alignItems="center" gap={1.5}>
+                        <Typography variant="h6">Processing Status</Typography>
+                        {refreshing && (
+                          <Tooltip title="Auto-refreshing data...">
+                            <Typography sx={{ fontSize: '0.8rem', color: 'text.secondary', animation: 'pulse 1.5s infinite' }}>
+                              🔄
+                            </Typography>
+                          </Tooltip>
+                        )}
+                        {/* Active/Ready Status Chip */}
+                        <Chip
+                          label={uploadedFiles.filter(f => f.processing_status === 'completed').length > 0 
+                            ? 'Active' : 'Ready'}
+                          color={uploadedFiles.filter(f => f.processing_status === 'processing').length > 0 
+                            ? 'warning' : 'success'}
+                          variant="outlined"
+                          size="small"
+                        />
+                        
+                        {/* Processing Stats Tooltip */}
+                        {uploadedFiles.length > 0 && (
+                          <Tooltip 
+                            title={
+                              <Box>
+                                <Typography variant="subtitle2" gutterBottom color="inherit">
+                                  File Processing Statistics:
+                                </Typography>
+                                <Typography variant="body2" color="inherit" sx={{ mb: 0.5 }}>
+                                  <strong>Total Files:</strong> {uploadedFiles.length}
+                                </Typography>
+                                <Typography variant="body2" color="inherit" sx={{ mb: 0.5 }}>
+                                  <strong>Completed:</strong> {uploadedFiles.filter(f => f.processing_status === 'completed').length}
+                                </Typography>
+                                <Typography variant="body2" color="inherit" sx={{ mb: 0.5 }}>
+                                  <strong>Processing:</strong> {uploadedFiles.filter(f => f.processing_status === 'processing').length}
+                                </Typography>
+                                <Typography variant="body2" color="inherit" sx={{ mb: 0.5 }}>
+                                  <strong>Pending:</strong> {uploadedFiles.filter(f => f.processing_status === 'pending' || !f.processing_status).length}
+                                </Typography>
+                                <Typography variant="body2" color="inherit">
+                                  <strong>Failed:</strong> {uploadedFiles.filter(f => f.processing_status === 'failed').length}
+                                </Typography>
+                              </Box>
+                            }
+                            arrow
+                            placement="left"
+                          >
+                            <IconButton
+                              size="small"
+                              sx={{ 
+                                color: 'primary.main',
+                                '&:hover': { backgroundColor: 'action.hover' }
+                              }}
+                            >
+                              <InfoIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+                      </Box>
                       {uploadedFiles.length > 0 && (
                         (() => {
                           const processingFilesList = uploadedFiles.filter(f => f.processing_status === 'processing');
@@ -603,13 +789,13 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
                           
                           if (processingFilesList.length > 0) {
                             const isManual = processingFilesList.some(f => processingFiles.has(f.id));
-                            return <Typography sx={{ fontSize: '1.2rem' }}>{isManual ? '👤' : '🤖'}</Typography>;
+                            return <Typography sx={{ fontSize: '1.4rem' }}>{isManual ? '👤' : '🤖'}</Typography>;
                           } else if (pendingFiles.length > 0) {
-                            return <Typography sx={{ fontSize: '1.2rem' }}>⏳</Typography>;
+                            return <Typography sx={{ fontSize: '1.4rem' }}>⏳</Typography>;
                           } else if (completedFiles.length > 0) {
-                            return <Typography sx={{ fontSize: '1.2rem' }}>✅</Typography>;
+                            return <Typography sx={{ fontSize: '1.4rem' }}>✅</Typography>;
                           } else if (failedFiles.length > 0) {
-                            return <Typography sx={{ fontSize: '1.2rem' }}>❌</Typography>;
+                            return <Typography sx={{ fontSize: '1.4rem' }}>❌</Typography>;
                           }
                           return null;
                         })()
@@ -626,16 +812,16 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
                             <Box sx={{ 
                               display: 'flex', 
                               alignItems: 'center', 
-                              gap: 1,
-                              mt: 0.5,
-                              p: 1,
-                              borderRadius: 1,
+                              gap: 1.5,
+                              mt: 1,
+                              p: 1.5,
+                              borderRadius: 2,
                               backgroundColor: 'info.light',
                               border: '1px solid',
                               borderColor: 'info.main',
                             }}>
-                              <Typography sx={{ fontSize: '0.9rem' }}>⏰</Typography>
-                              <Typography variant="caption" color="info.main">
+                              <Typography sx={{ fontSize: '1rem' }}>⏰</Typography>
+                              <Typography variant="body2" color="info.dark" sx={{ fontWeight: 500 }}>
                                 Next auto-job in: {Math.floor(nextJobCountdown / 60)}:{(nextJobCountdown % 60).toString().padStart(2, '0')}
                               </Typography>
                             </Box>
@@ -647,36 +833,50 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
                               <Box key={file.id} sx={{ 
                                 display: 'flex', 
                                 alignItems: 'center', 
-                                gap: 1,
-                                p: 1,
-                                borderRadius: 1,
+                                justifyContent: 'space-between',
+                                gap: 2,
+                                p: 1.5,
+                                borderRadius: 2,
                                 backgroundColor: isManualProcessing ? 'primary.light' : 'warning.light',
                                 border: `2px solid ${isManualProcessing ? 'primary.main' : 'warning.main'}`,
-                                mt: 0.5
+                                mt: 1
                               }}>
                                 <Box sx={{ 
-                                  width: 8, 
-                                  height: 8, 
-                                  borderRadius: '50%', 
-                                  backgroundColor: isManualProcessing ? 'primary.main' : 'warning.main',
-                                  animation: 'pulse 2s infinite'
-                                }} />
-                                <Typography variant="body2" sx={{ 
-                                  fontWeight: 'bold',
-                                  color: isManualProcessing ? 'primary.contrastText' : 'warning.contrastText'
+                                  display: 'flex', 
+                                  alignItems: 'center', 
+                                  gap: 1.5,
+                                  flex: 1,
+                                  minWidth: 0 // Allow text to truncate
                                 }}>
-                                  {file.file_name || file.filename}
-                                </Typography>
+                                  <Box sx={{ 
+                                    width: 10, 
+                                    height: 10, 
+                                    borderRadius: '50%', 
+                                    backgroundColor: isManualProcessing ? 'primary.main' : 'warning.main',
+                                    animation: 'pulse 2s infinite',
+                                    flexShrink: 0
+                                  }} />
+                                  <Typography variant="body2" sx={{ 
+                                    fontWeight: 600,
+                                    color: isManualProcessing ? 'primary.dark' : 'warning.dark',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap'
+                                  }}>
+                                    {file.file_name || file.filename}
+                                  </Typography>
+                                </Box>
                                 <Chip 
                                   label={isManualProcessing ? 'Manual Processing' : 'Automated Processing'}
                                   size="small"
                                   color={isManualProcessing ? 'primary' : 'warning'}
                                   variant="filled"
                                   sx={{ 
-                                    fontWeight: 'bold',
-                                    fontSize: '0.7rem',
+                                    fontWeight: 600,
+                                    fontSize: '0.75rem',
+                                    flexShrink: 0,
                                     '& .MuiChip-label': {
-                                      px: 1
+                                      px: 1.5
                                     }
                                   }}
                                 />
@@ -816,65 +1016,7 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
                       )}
                     </Box>
                   </Box>
-                  <Box display="flex" alignItems="center" gap={1}>
-                    <Chip
-                      label={uploadedFiles.filter(f => f.processing_status === 'completed').length > 0 
-                        ? 'Active' : 'Ready'}
-                      color={uploadedFiles.filter(f => f.processing_status === 'processing').length > 0 
-                        ? 'warning' : 'success'}
-                      variant="outlined"
-                    />
-                    <RefreshIcon 
-                      sx={{ 
-                        fontSize: '0.8rem', 
-                        color: 'text.secondary',
-                        animation: 'spin 2s linear infinite',
-                        '@keyframes spin': {
-                          '0%': { transform: 'rotate(0deg)' },
-                          '100%': { transform: 'rotate(360deg)' }
-                        }
-                      }} 
-                    />
-                  </Box>
-                  {/* Processing Stats Tooltip */}
-                  {uploadedFiles.length > 0 && (
-                    <Tooltip 
-                      title={
-                        <Box>
-                          <Typography variant="subtitle2" gutterBottom color="inherit">
-                            File Processing Statistics:
-                          </Typography>
-                          <Typography variant="body2" color="inherit" sx={{ mb: 0.5 }}>
-                            <strong>Total Files:</strong> {uploadedFiles.length}
-                          </Typography>
-                          <Typography variant="body2" color="inherit" sx={{ mb: 0.5 }}>
-                            <strong>Completed:</strong> {uploadedFiles.filter(f => f.processing_status === 'completed').length}
-                          </Typography>
-                          <Typography variant="body2" color="inherit" sx={{ mb: 0.5 }}>
-                            <strong>Processing:</strong> {uploadedFiles.filter(f => f.processing_status === 'processing').length}
-                          </Typography>
-                          <Typography variant="body2" color="inherit" sx={{ mb: 0.5 }}>
-                            <strong>Pending:</strong> {uploadedFiles.filter(f => f.processing_status === 'pending' || !f.processing_status).length}
-                          </Typography>
-                          <Typography variant="body2" color="inherit">
-                            <strong>Failed:</strong> {uploadedFiles.filter(f => f.processing_status === 'failed').length}
-                          </Typography>
-                        </Box>
-                      }
-                      arrow
-                      placement="left"
-                    >
-                      <IconButton
-                        size="small"
-                        sx={{ 
-                          color: 'primary.main',
-                          '&:hover': { backgroundColor: 'action.hover' }
-                        }}
-                      >
-                        <InfoIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                  )}
+
                 </Box>
               </CardContent>
             </Card>
@@ -1309,13 +1451,16 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
         {(uploadingAsJson || uploadingAndProcessing) && processingStatus && (
           <Card sx={{ mt: 3 }}>
             <CardContent>
-              <Box display="flex" alignItems="center" gap={2} sx={{ mb: 2 }}>
-                {getStatusIcon(processingStatus.status)}
-                <Typography variant="h6">Processing Status</Typography>
+              <Box display="flex" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
+                <Box display="flex" alignItems="center" gap={2}>
+                  {getStatusIcon(processingStatus.status)}
+                  <Typography variant="h6">Processing Status</Typography>
+                </Box>
                 <Chip
                   label={processingStatus.status}
                   color={getStatusColor(processingStatus.status)}
                   variant="outlined"
+                  sx={{ fontWeight: 600 }}
                 />
               </Box>
               
@@ -1428,6 +1573,188 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
         </DialogActions>
       </Dialog>
 
+      {/* User Management Dialog */}
+      <Dialog 
+        open={showUserManagement} 
+        onClose={() => setShowUserManagement(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>
+          <Box display="flex" alignItems="center" justifyContent="space-between">
+            <Box display="flex" alignItems="center" gap={1}>
+              <PeopleIcon />
+              <Typography variant="h6">User Management</Typography>
+            </Box>
+            <Button
+              startIcon={<PersonAddIcon />}
+              variant="outlined"
+              size="small"
+              onClick={() => {
+                // Add new user functionality
+                setEditingUser({ username: '', email: '', role: 'user' });
+                setShowEditDialog(true);
+              }}
+            >
+              Add User
+            </Button>
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <Table>
+            <TableHead>
+              <TableRow>
+                <TableCell>Avatar</TableCell>
+                <TableCell>Username</TableCell>
+                <TableCell>Email</TableCell>
+                <TableCell>Role</TableCell>
+                <TableCell>Created Date</TableCell>
+                <TableCell>Actions</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {users.map((user) => (
+                <TableRow key={user.id}>
+                  <TableCell>
+                    <Avatar sx={{ bgcolor: 'primary.main' }}>
+                      {user.username?.charAt(0).toUpperCase()}
+                    </Avatar>
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2" fontWeight="medium">
+                      {user.username}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2">
+                      {user.email || 'N/A'}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>
+                    <Chip 
+                      label={user.role || 'user'} 
+                      size="small"
+                      color={user.role === 'admin' ? 'primary' : 'default'}
+                      variant="outlined"
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2" color="text.secondary">
+                      {user.created_at ? new Date(user.created_at).toLocaleDateString() : 'N/A'}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>
+                    <Box display="flex" gap={1}>
+                      <Tooltip title="Edit User">
+                        <IconButton 
+                          size="small" 
+                          onClick={() => handleEditUser(user)}
+                          color="primary"
+                        >
+                          <EditIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Delete User">
+                        <IconButton 
+                          size="small" 
+                          onClick={() => handleDeleteUser(user)}
+                          color="error"
+                          disabled={user.username === userInfo?.username} // Prevent self-deletion
+                        >
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {users.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={6} align="center">
+                    <Typography variant="body2" color="text.secondary">
+                      No users found
+                    </Typography>
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowUserManagement(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Edit User Dialog */}
+      <Dialog open={showEditDialog} onClose={() => setShowEditDialog(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          {editingUser?.id ? 'Edit User' : 'Add New User'}
+        </DialogTitle>
+        <DialogContent>
+          <Box display="flex" flexDirection="column" gap={2} sx={{ mt: 1 }}>
+            <TextField
+              label="Username"
+              value={editingUser?.username || ''}
+              onChange={(e) => setEditingUser(prev => ({ ...prev, username: e.target.value }))}
+              fullWidth
+              required
+            />
+            <TextField
+              label="Email"
+              type="email"
+              value={editingUser?.email || ''}
+              onChange={(e) => setEditingUser(prev => ({ ...prev, email: e.target.value }))}
+              fullWidth
+            />
+            <TextField
+              label="Role"
+              select
+              value={editingUser?.role || 'user'}
+              onChange={(e) => setEditingUser(prev => ({ ...prev, role: e.target.value }))}
+              fullWidth
+              SelectProps={{
+                native: true
+              }}
+            >
+              <option value="user">User</option>
+              <option value="admin">Admin</option>
+            </TextField>
+            {!editingUser?.id && (
+              <TextField
+                label="Password"
+                type="password"
+                value={editingUser?.password || ''}
+                onChange={(e) => setEditingUser(prev => ({ ...prev, password: e.target.value }))}
+                fullWidth
+                required
+              />
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowEditDialog(false)}>Cancel</Button>
+          <Button onClick={handleSaveUser} variant="contained">
+            {editingUser?.id ? 'Update' : 'Create'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Delete User Confirmation Dialog */}
+      <Dialog open={showDeleteDialog} onClose={() => setShowDeleteDialog(false)}>
+        <DialogTitle>Confirm Delete</DialogTitle>
+        <DialogContent>
+          <Typography>
+            Are you sure you want to delete user "{userToDelete?.username}"? This action cannot be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowDeleteDialog(false)}>Cancel</Button>
+          <Button onClick={handleConfirmDeleteUser} color="error" variant="contained">
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       {/* Snackbar notifications */}
       <Snackbar
         open={!!error}
@@ -1450,6 +1777,36 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
           {success}
         </Alert>
       </Snackbar>
+
+      {/* Fixed Footer */}
+      <Box
+        component="footer"
+        sx={{
+          position: 'fixed',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          backgroundColor: 'primary.main',
+          color: 'white',
+          py: 1,
+          px: 2,
+          zIndex: 1000,
+          borderTop: '1px solid',
+          borderColor: 'divider',
+          boxShadow: '0 -2px 8px rgba(0,0,0,0.1)'
+        }}
+      >
+        <Typography 
+          variant="body2" 
+          align="center"
+          sx={{ 
+            fontSize: '0.875rem',
+            fontWeight: 500
+          }}
+        >
+          © 2025 Neha Info Tech. All rights reserved.
+        </Typography>
+      </Box>
     </Box>
   );
 };

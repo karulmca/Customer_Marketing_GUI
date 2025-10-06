@@ -456,6 +456,186 @@ async def logout(session_id: str):
     
     return {"success": True, "message": "Logged out successfully"}
 
+# User Management Endpoints
+@app.get("/api/auth/users")
+async def get_users(session_id: str):
+    """Get all users - admin only"""
+    try:
+        # Verify session
+        user_info = verify_session(session_id)
+        if not user_info:
+            raise HTTPException(status_code=401, detail="Invalid session")
+        
+        # Check if user is admin (optional - you can remove this if you want all users to see user list)
+        # if user_info.get('role') != 'admin':
+        #     raise HTTPException(status_code=403, detail="Admin access required")
+        
+        # Get users from database
+        from auth.user_auth import UserAuthenticator
+        auth = UserAuthenticator()
+        
+        # Get connection and fetch users
+        conn = get_database_connection()
+        if not conn:
+            raise HTTPException(status_code=500, detail="Database connection failed")
+        
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, username, email, role, created_at 
+            FROM users 
+            ORDER BY created_at DESC
+        """)
+        
+        users = []
+        for row in cursor.fetchall():
+            users.append({
+                'id': row[0],
+                'username': row[1],
+                'email': row[2],
+                'role': row[3],
+                'created_at': row[4].isoformat() if row[4] else None
+            })
+        
+        cursor.close()
+        conn.close()
+        
+        return {"success": True, "users": users}
+        
+    except Exception as e:
+        logger.error(f"Error getting users: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get users: {str(e)}")
+
+@app.post("/api/auth/users")
+async def create_user(user_data: dict, session_id: str):
+    """Create new user - admin only"""
+    try:
+        # Verify session
+        user_info = verify_session(session_id)
+        if not user_info:
+            raise HTTPException(status_code=401, detail="Invalid session")
+        
+        # Create user using existing auth system
+        from auth.user_auth import UserAuthenticator
+        auth = UserAuthenticator()
+        
+        # Register the new user
+        result = auth.register_user(
+            username=user_data.get('username'),
+            password=user_data.get('password'),
+            email=user_data.get('email')
+        )
+        
+        if result['success']:
+            # Update role if specified
+            if user_data.get('role') and user_data.get('role') != 'user':
+                conn = get_database_connection()
+                if conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "UPDATE users SET role = %s WHERE username = %s",
+                        (user_data.get('role'), user_data.get('username'))
+                    )
+                    conn.commit()
+                    cursor.close()
+                    conn.close()
+            
+            return {"success": True, "message": "User created successfully"}
+        else:
+            raise HTTPException(status_code=400, detail=result.get('message', 'Failed to create user'))
+            
+    except Exception as e:
+        logger.error(f"Error creating user: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
+
+@app.put("/api/auth/users")
+async def update_user(user_data: dict, session_id: str):
+    """Update user information"""
+    try:
+        # Verify session
+        user_info = verify_session(session_id)
+        if not user_info:
+            raise HTTPException(status_code=401, detail="Invalid session")
+        
+        # Get connection and update user
+        conn = get_database_connection()
+        if not conn:
+            raise HTTPException(status_code=500, detail="Database connection failed")
+        
+        cursor = conn.cursor()
+        
+        # Build update query dynamically
+        update_fields = []
+        values = []
+        
+        if 'username' in user_data and user_data['username']:
+            update_fields.append("username = %s")
+            values.append(user_data['username'])
+        
+        if 'email' in user_data:
+            update_fields.append("email = %s")
+            values.append(user_data['email'])
+            
+        if 'role' in user_data:
+            update_fields.append("role = %s")
+            values.append(user_data['role'])
+        
+        if update_fields:
+            values.append(user_data['id'])  # Add ID for WHERE clause
+            query = f"UPDATE users SET {', '.join(update_fields)} WHERE id = %s"
+            cursor.execute(query, values)
+            conn.commit()
+        
+        cursor.close()
+        conn.close()
+        
+        return {"success": True, "message": "User updated successfully"}
+        
+    except Exception as e:
+        logger.error(f"Error updating user: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update user: {str(e)}")
+
+@app.delete("/api/auth/users/{user_id}")
+async def delete_user(user_id: int, session_id: str):
+    """Delete user"""
+    try:
+        # Verify session
+        user_info = verify_session(session_id)
+        if not user_info:
+            raise HTTPException(status_code=401, detail="Invalid session")
+        
+        # Prevent self-deletion
+        conn = get_database_connection()
+        if not conn:
+            raise HTTPException(status_code=500, detail="Database connection failed")
+        
+        cursor = conn.cursor()
+        
+        # Check if trying to delete self
+        cursor.execute("SELECT username FROM users WHERE id = %s", (user_id,))
+        user_to_delete = cursor.fetchone()
+        
+        if user_to_delete and user_to_delete[0] == user_info.get('username'):
+            cursor.close()
+            conn.close()
+            raise HTTPException(status_code=400, detail="Cannot delete your own account")
+        
+        # Delete user
+        cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
+        if cursor.rowcount == 0:
+            cursor.close()
+            conn.close()
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return {"success": True, "message": "User deleted successfully"}
+        
+    except Exception as e:
+        logger.error(f"Error deleting user: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete user: {str(e)}")
+
 @app.get("/api/debug/sessions")
 async def debug_sessions():
     """Debug endpoint to check active sessions"""

@@ -4,7 +4,8 @@
  */
 
 // Base API URL - configured via environment variables
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://company-scraper-backend.onrender.com/api';
+const API_BASE_URL = 'http://localhost:8000/api';
+//const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://company-scraper-backend.onrender.com/api';
 
 export { API_BASE_URL };
 
@@ -19,6 +20,14 @@ export const API_ENDPOINTS = {
   // Template endpoints
   templates: {
     sample: `${API_BASE_URL}/sample-template`,
+  },
+  
+  // User management endpoints
+  auth: {
+    getUsers: (sessionId) => `${API_BASE_URL}/auth/users?session_id=${sessionId}`,
+    updateUser: (sessionId) => `${API_BASE_URL}/auth/users?session_id=${sessionId}`,
+    deleteUser: (sessionId, userId) => `${API_BASE_URL}/auth/users/${userId}?session_id=${sessionId}`,
+    createUser: (sessionId) => `${API_BASE_URL}/auth/users?session_id=${sessionId}`,
   }
 };
 
