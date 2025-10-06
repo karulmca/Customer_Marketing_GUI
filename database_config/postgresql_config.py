@@ -38,7 +38,7 @@ class PostgreSQLConfig:
                 ]
             else:
                 # Running as Python script
-                logger.info("Detected Python script environment")
+                logger.debug("Detected Python script environment")
                 possible_locations = [
                     os.path.join(os.path.dirname(__file__), '.env'),  # database_config/.env
                     os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'),  # root/.env
@@ -50,7 +50,7 @@ class PostgreSQLConfig:
                 logger.debug(f"Checking: {location}")
                 if os.path.exists(location):
                     self.config_file = location
-                    logger.info(f"Found .env file at: {location}")
+                    logger.debug(f"Found .env file at: {location}")
                     break
             
             if not self.config_file:
@@ -59,7 +59,7 @@ class PostgreSQLConfig:
                     logger.warning("No .env file found in any expected location")
                     logger.warning(f"Searched locations: {possible_locations}")
                 else:
-                    logger.info("Using environment variables for database configuration")
+                    logger.debug("Using environment variables for database configuration")
                 self.config_file = possible_locations[0]  # Use default as fallback
         
         self.config = self.load_config()
@@ -74,14 +74,14 @@ class PostgreSQLConfig:
         # Try to load from .env file first
         if self.config_file and os.path.exists(self.config_file):
             try:
-                logger.info(f"Loading configuration from: {self.config_file}")
+                logger.debug(f"Loading configuration from: {self.config_file}")
                 with open(self.config_file, 'r') as f:
                     for line in f:
                         line = line.strip()
                         if line and not line.startswith('#') and '=' in line:
                             key, value = line.split('=', 1)
                             config[key.strip()] = value.strip()
-                logger.info(f"Loaded {len(config)} configuration items")
+                logger.debug(f"Loaded {len(config)} configuration items")
             except Exception as e:
                 logger.error(f"Failed to load .env file: {e}")
         else:
@@ -89,7 +89,7 @@ class PostgreSQLConfig:
             if not os.getenv('DATABASE_URL') and not os.getenv('DB_HOST'):
                 logger.warning(f".env file not found at: {self.config_file}")
             else:
-                logger.info("Using environment variables instead of .env file")
+                logger.debug("Using environment variables instead of .env file")
         
         # Override with environment variables if they exist
         env_vars = [
