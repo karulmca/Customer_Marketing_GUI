@@ -841,30 +841,34 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
             </IconButton>
           </Tooltip>
           
-          {/* User Management Menu */}
-          <Tooltip title="User Management">
-            <IconButton color="inherit" onClick={handleUserMenuClick}>
-              <PeopleIcon />
-            </IconButton>
-          </Tooltip>
-          <Menu
-            anchorEl={userMenuAnchor}
-            open={Boolean(userMenuAnchor)}
-            onClose={handleUserMenuClose}
-            anchorOrigin={{
-              vertical: 'bottom',
-              horizontal: 'right',
-            }}
-            transformOrigin={{
-              vertical: 'top',
-              horizontal: 'right',
-            }}
-          >
-            <MenuItem onClick={handleShowUserManagement}>
-              <PeopleIcon sx={{ mr: 1 }} />
-              Manage Users
-            </MenuItem>
-          </Menu>
+          {/* User Management Menu - Only for superuser */}
+          {userInfo?.role === 'superuser' && (
+            <>
+              <Tooltip title="User Management">
+                <IconButton color="inherit" onClick={handleUserMenuClick}>
+                  <PeopleIcon />
+                </IconButton>
+              </Tooltip>
+              <Menu
+                anchorEl={userMenuAnchor}
+                open={Boolean(userMenuAnchor)}
+                onClose={handleUserMenuClose}
+                anchorOrigin={{
+                  vertical: 'bottom',
+                  horizontal: 'right',
+                }}
+                transformOrigin={{
+                  vertical: 'top',
+                  horizontal: 'right',
+                }}
+              >
+                <MenuItem onClick={handleShowUserManagement}>
+                  <PeopleIcon sx={{ mr: 1 }} />
+                  Manage Users
+                </MenuItem>
+              </Menu>
+            </>
+          )}
           
           <IconButton color="inherit" onClick={onLogout}>
             <LogoutIcon />
