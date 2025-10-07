@@ -67,7 +67,7 @@ class FileUploadProcessor:
             print(f"Error calculating file hash: {e}")
             return ""
     
-    def upload_file_as_json(self, file_path: str, uploaded_by: str = "GUI_User", original_filename: str = None) -> Optional[str]:
+    def upload_file_as_json(self, file_path: str, uploaded_by: str = "GUI_User", original_filename: str = None, user_id: int = None) -> Optional[str]:
         """
         Upload file content as JSON to file_upload table
         Returns file_upload_id if successful, None if failed
@@ -149,6 +149,7 @@ class FileUploadProcessor:
                 'original_columns': json.dumps(list(df.columns)),
                 'raw_data': json.dumps(raw_data),
                 'uploaded_by': uploaded_by,
+                'user_id': user_id,
                 'processing_status': 'pending',
                 'records_count': len(df),
                 'file_hash': file_hash
@@ -260,7 +261,8 @@ class FileUploadProcessor:
                     file_query = f"""
                         UPDATE file_upload 
                         SET processing_status = 'pending',
-                            updated_at = '{current_time}'
+                            updated_at = '{current_time}',
+                            user_id = {user_id}
                         WHERE id = '{file_upload_id}' AND processing_status != 'pending'
                     """
                     self.db_connection.execute_query(file_query)
@@ -269,7 +271,8 @@ class FileUploadProcessor:
                     if "updated_at" in str(e):
                         file_query = f"""
                             UPDATE file_upload 
-                            SET processing_status = 'pending'
+                            SET processing_status = 'pending',
+                                user_id = {user_id}
                             WHERE id = '{file_upload_id}' AND processing_status != 'pending'
                         """
                         self.db_connection.execute_query(file_query)
@@ -624,7 +627,8 @@ class FileUploadProcessor:
                 file_query = f"""
                     UPDATE file_upload 
                     SET processing_status = 'processing',
-                        updated_at = '{current_time}'
+                        updated_at = '{current_time}',
+                        user_id = {user_id}
                     WHERE id = '{file_upload_id}'
                 """
                 file_success = self.db_connection.execute_query(file_query)
@@ -633,7 +637,8 @@ class FileUploadProcessor:
                 if "updated_at" in str(e):
                     file_query = f"""
                         UPDATE file_upload 
-                        SET processing_status = 'processing'
+                        SET processing_status = 'processing',
+                            user_id = {user_id}
                         WHERE id = '{file_upload_id}'
                     """
                     file_success = self.db_connection.execute_query(file_query)
@@ -687,7 +692,8 @@ class FileUploadProcessor:
                     SET processing_status = 'completed',
                         processed_date = '{current_time}',
                         processed_records = {processed_records},
-                        updated_at = '{current_time}'
+                        updated_at = '{current_time}',
+                        user_id = {user_id}
                     WHERE id = '{file_upload_id}'
                 """
                 file_success = self.db_connection.execute_query(file_query)
@@ -698,7 +704,8 @@ class FileUploadProcessor:
                         UPDATE file_upload 
                         SET processing_status = 'completed',
                             processed_date = '{current_time}',
-                            processed_records = {processed_records}
+                            processed_records = {processed_records},
+                            user_id = {user_id}
                         WHERE id = '{file_upload_id}'
                     """
                     file_success = self.db_connection.execute_query(file_query)

@@ -142,11 +142,13 @@ async def health_check():
 
 @app.get("/scheduler-status")
 async def scheduler_status():
-    """Check detailed scheduler status and jobs"""
+    """Check detailed scheduler status and jobs, including configured interval"""
     try:
+        from database_config.config_loader import get_scheduler_interval
+        interval_minutes = get_scheduler_interval()
         if not scheduler:
-            return {"error": "Scheduler not initialized", "scheduler_running": False}
-        
+            return {"error": "Scheduler not initialized", "scheduler_running": False, "interval_minutes": interval_minutes}
+
         jobs = scheduler.get_jobs()
         job_info = []
         for job in jobs:
@@ -154,14 +156,16 @@ async def scheduler_status():
                 "id": job.id,
                 "name": job.name,
                 "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
-                "trigger": str(job.trigger)
+                "trigger": str(job.trigger),
+                "interval_minutes": interval_minutes
             })
-        
+
         return {
             "scheduler_running": scheduler.running,
             "jobs": job_info,
             "total_jobs": len(jobs),
-            "scheduler_available": APSCHEDULER_AVAILABLE
+            "scheduler_available": APSCHEDULER_AVAILABLE,
+            "interval_minutes": interval_minutes
         }
     except Exception as e:
         return {"error": str(e), "scheduler_running": False}
@@ -1869,8 +1873,7 @@ async def upload_and_process_file(file: UploadFile = File(...), session_id: str 
                 file_upload_id = file_processor.upload_file_as_json(
                     temp_file_path, 
                     uploaded_by=username,
-                    original_filename=file.filename,
-                    user_id=user_id
+                    original_filename=file.filename
                 )
                 
                 if file_upload_id:
