@@ -566,12 +566,16 @@ class FileUploadProcessor:
             
             # Apply column mapping
             mapped_df = self.apply_column_mapping(df)
-            
+
+            # Truncate 'industry' column to 200 characters if present
+            if 'industry' in mapped_df.columns:
+                mapped_df['industry'] = mapped_df['industry'].astype(str).str.slice(0, 200)
+
             # Add metadata
             mapped_df['file_source'] = file_name
             mapped_df['file_upload_id'] = file_upload_id
             mapped_df['created_by'] = 'scheduled_processor'
-            
+
             # Insert into company_data table first
             success = self.db_connection.insert_dataframe(mapped_df, "company_data")
             
