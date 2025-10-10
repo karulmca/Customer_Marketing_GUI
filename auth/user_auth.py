@@ -350,6 +350,10 @@ class UserAuthenticator:
             del self.active_sessions[token]
         
         return len(expired_tokens)
+    
+    def register(self, username: str, password: str, email: str = None, role: str = "user") -> Dict[str, Any]:
+        """Register a new user (API wrapper for create_user)"""
+        return self.create_user(username, password, email, role)
 
 # Global authenticator instance
 auth_manager = UserAuthenticator()
