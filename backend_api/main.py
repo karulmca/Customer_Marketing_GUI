@@ -3,7 +3,7 @@ FastAPI Backend for Company Data Scraper
 Exposes existing Python functionality as REST APIs for React frontend
 """
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, status, Request
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, status, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
@@ -1457,7 +1457,7 @@ async def database_status(session_id: str):
             if connection:
                 # Get database version info
                 cursor = connection.cursor()
-                cursor.execute("SELECT version();")
+                cursor.execute("SELECT version();");
                 db_version = cursor.fetchone()[0]
                 cursor.close()
                 connection.close()
@@ -2362,13 +2362,7 @@ async def delete_company_record(record_id: str, session_id: str):
 @app.post("/api/jobs/process-pending")
 async def run_process_pending_now(session_id: str = ""):
     """Run processing of pending uploads immediately in background (one-shot)."""
-    # Verify session (optional: could enforce admin)
-    if session_id:
-        try:
-            verify_session(session_id)
-        except Exception:
-            # proceed even if session invalid; comment to enforce
-            pass
+    # Session validation removed for job processing; jobs run independently of user sessions
 
     # Fire-and-forget thread to run the job once
     _threading.Thread(target=_process_pending_uploads, daemon=True).start()
@@ -2382,11 +2376,7 @@ async def start_scheduler(session_id: str = "", mode: str = "cron", interval_min
     mode: 'cron' (default, runs every 2 minutes) or 'interval' (every N minutes)
     interval_minutes: used only for interval mode
     """
-    if session_id:
-        try:
-            verify_session(session_id)
-        except Exception:
-            pass
+    # Session validation removed for scheduler start; jobs run independently of user sessions
 
     with _scheduler_lock:
         sched = _ensure_scheduler()
@@ -2613,3 +2603,75 @@ if __name__ == "__main__":
     import uvicorn
     print("🚀 Starting FastAPI server on http://localhost:8000")
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
+
+from fastapi import Body
+
+@app.post("/api/superadmin/kill-process")
+def kill_process_api(process_id: str = Body(..., embed=True)):
+    """
+    Kill a processing file and update statuses in file_upload, processing_jobs, and company_data tables to 'error'.
+    """
+    try:
+        from database_config.postgresql_config import PostgreSQLConfig
+        import psycopg2
+        db_config = PostgreSQLConfig()
+        connection_params = db_config.get_connection_params()
+        connection = psycopg2.connect(**connection_params)
+        cursor = connection.cursor()
+
+        # Update file_upload status
+        cursor.execute("UPDATE file_upload SET processing_status = 'error' WHERE id = %s", (process_id,))
+        # Update processing_jobs status
+        cursor.execute("UPDATE processing_jobs SET job_status = 'error' WHERE file_upload_id = %s", (process_id,))
+        # Update company_data status
+        cursor.execute("UPDATE company_data SET processing_status = 'error' WHERE file_upload_id = %s", (process_id,))
+
+        connection.commit()
+        cursor.close()
+        connection.close()
+        return {"success": True, "message": "Process killed and statuses updated."}
+    except Exception as e:
+        logger.error(f"Error killing process: {str(e)}")
+        return {"success": False, "message": str(e)}
+
+
+# Register the endpoint above the main block
+@app.get("/api/superadmin/processing-files")
+def get_processing_files():
+    """
+    Return files from processing_jobs with job_status = 'processing', joined with file_upload for file details.
+    """
+    try:
+        from database_config.postgresql_config import PostgreSQLConfig
+        import psycopg2
+        db_config = PostgreSQLConfig()
+        connection_params = db_config.get_connection_params()
+        connection = psycopg2.connect(**connection_params)
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            SELECT pj.id, fu.file_name, fu.upload_date, fu.uploaded_by, pj.job_status, fu.id as file_id
+            FROM processing_jobs pj
+            JOIN file_upload fu ON pj.file_upload_id = fu.id
+            WHERE pj.job_status = 'processing'
+            ORDER BY fu.upload_date DESC
+            LIMIT 50
+            """
+        )
+        rows = cursor.fetchall()
+        cursor.close()
+        connection.close()
+        files = []
+        for r in rows:
+            files.append({
+                "job_id": r[0],
+                "file_name": r[1],
+                "upload_date": r[2].isoformat() if r[2] else None,
+                "uploaded_by": r[3],
+                "status": r[4],
+                "file_id": r[5]
+            })
+        return {"files": files, "count": len(files)}
+    except Exception as e:
+        logger.error(f"Error fetching processing files: {str(e)}")
+        return {"files": [], "count": 0, "error": str(e)}
