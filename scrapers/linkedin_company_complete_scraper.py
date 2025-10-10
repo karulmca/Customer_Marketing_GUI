@@ -662,7 +662,12 @@ class CompleteCompanyScraper:
         
         for index, row in df.iterrows():
             logger.info(f"Processing company {index + 1}/{total_companies}: {row.get(company_name_column, 'Unknown')}")
-            
+
+            # Ensure columns are object dtype before assigning string values
+            for col in ['Company_Size_Enhanced', 'Industry_Enhanced', 'LinkedIn_Status', 'Size', 'Company_Size', 'Industry']:
+                if col in df.columns:
+                    df[col] = df[col].astype('object')
+
             # Extract LinkedIn data (company size and industry)
             linkedin_url = row.get(linkedin_column, '')
             if linkedin_url:
@@ -671,7 +676,7 @@ class CompleteCompanyScraper:
                 df.at[index, 'Company_Size_Enhanced'] = linkedin_data['company_size']
                 df.at[index, 'Industry_Enhanced'] = linkedin_data['industry']
                 df.at[index, 'LinkedIn_Status'] = linkedin_data['linkedin_status']
-                
+
                 # Also populate original columns if they exist (for display compatibility)
                 if 'Size' in df.columns:
                     df.at[index, 'Size'] = linkedin_data['company_size']
