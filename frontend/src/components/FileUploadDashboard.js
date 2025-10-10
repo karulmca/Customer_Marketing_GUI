@@ -866,6 +866,11 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
                   <PeopleIcon sx={{ mr: 1 }} />
                   Manage Users
                 </MenuItem>
+                {/* Superadmin: Kill Process link */}
+                <MenuItem component="a" href="/superadmin/process-kill">
+                  <span role="img" aria-label="kill-process" style={{ marginRight: 8 }}>🛑</span>
+                  Kill Process
+                </MenuItem>
               </Menu>
             </>
           )}

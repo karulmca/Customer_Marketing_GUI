@@ -13,6 +13,7 @@ import { SnackbarProvider } from 'notistack';
 
 import LoginForm from './components/LoginForm';
 import FileUploadDashboard from './components/FileUploadDashboard';
+import SuperadminProcessKill from './components/superadmin-processKill';
 import { AuthService } from './services/AuthService';
 
 // Material-UI theme
@@ -167,6 +168,16 @@ function App() {
                     <Navigate to="/login" replace />
                   )
                 } 
+              />
+              <Route 
+                path="/superadmin/process-kill" 
+                element={
+                  isAuthenticated && userInfo?.role === 'superuser' ? (
+                    <SuperadminProcessKill />
+                  ) : (
+                    <Navigate to="/dashboard" replace />
+                  )
+                }
               />
               <Route 
                 path="/" 
