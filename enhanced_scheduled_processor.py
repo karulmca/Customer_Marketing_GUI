@@ -26,10 +26,12 @@ try:
     from database_config.file_upload_processor import FileUploadProcessor
     from database_config.db_utils import get_database_connection
     from database_config.config_loader import get_scheduler_interval, is_single_job_per_user_enabled
+    from database_config.automated_file_upload_processor import AutomatedFileUploadProcessor
     DATABASE_AVAILABLE = True
 except ImportError as e:
     print(f"❌ Database dependencies not available: {e}")
     DATABASE_AVAILABLE = False
+    AutomatedFileUploadProcessor = None
 
 # Setup logging
 os.makedirs('logs', exist_ok=True)
@@ -492,6 +494,11 @@ class EnhancedScheduledProcessor:
     """Enhanced scheduled processor with LinkedIn integration"""
     
     def __init__(self):
+        if AutomatedFileUploadProcessor:
+            self.processor = AutomatedFileUploadProcessor()
+        else:
+            self.processor = None
+        
         if not DATABASE_AVAILABLE:
             raise Exception("Database dependencies not available")
             
@@ -603,25 +610,25 @@ class EnhancedScheduledProcessor:
                 file_id = file_record['id']
                 file_name = file_record['file_name']
                 raw_data_str = file_record['raw_data']
-                
+
                 logger.info(f"🔄 Processing file: {file_name} (ID: {file_id})")
-                
+
                 try:
                     # Job Status Flow: queued → started → processing → completed/error
                     # Step 1: Update job status to 'started'
                     self.update_job_status(file_id, 'started')
-                    
+
                     # Step 2: Update file status to 'processing' and job status to 'processing'
                     self.update_file_status(file_id, 'processing', 'Starting comprehensive LinkedIn processing...')
                     self.update_job_status(file_id, 'processing', progress_info="LinkedIn scraping pipeline initiated")
-                    
+
                     logger.info(f"🚀 Starting comprehensive processing for {file_name}")
                     logger.info(f"📋 Processing stages:")
                     logger.info(f"   Stage 1: Data Preparation")
                     logger.info(f"   Stage 2: File Preparation")
                     logger.info(f"   Stage 3: LinkedIn Scraping (Company Size + Industry + Revenue)")
                     logger.info(f"   Stage 4: Database Storage")
-                    
+
                     # Parse JSON data - handle both string and dict
                     if isinstance(raw_data_str, str):
                         json_data = json.loads(raw_data_str)
@@ -630,15 +637,32 @@ class EnhancedScheduledProcessor:
                     else:
                         logger.error(f"Unexpected raw_data type: {type(raw_data_str)}")
                         continue
-                    
+
+                    # Start timer for timeout logic
+                    start_time = time.time()
+                    timeout_seconds = 45 * 60  # 45 minutes
+
                     # Process the data using LinkedIn scraper with progress tracking
-                    success = self.data_processor.process_json_data(
-                        json_data, 
-                        file_id, 
-                        scraper_type,
-                        progress_callback=self.update_processing_progress
-                    )
-                    
+                    success = False
+                    try:
+                        success = self.data_processor.process_json_data(
+                            json_data,
+                            file_id,
+                            scraper_type,
+                            progress_callback=self.update_processing_progress
+                        )
+                    except Exception as e:
+                        logger.error(f"❌ Exception during processing: {str(e)}")
+
+                    elapsed_time = time.time() - start_time
+                    if elapsed_time > timeout_seconds:
+                        # Mark job as error due to timeout
+                        error_msg = f"Processing timed out after 45 minutes ({elapsed_time/60:.1f} min)"
+                        self.update_job_status(file_id, 'error', error_message=error_msg)
+                        self.update_file_status(file_id, 'failed', error_msg)
+                        logger.error(f"❌ Job timed out for file: {file_name}")
+                        continue
+
                     if success:
                         # Step 3: Update job status to 'completed' and file status to 'processed'
                         final_msg = f"Successfully processed with LinkedIn data extraction complete"
@@ -646,17 +670,17 @@ class EnhancedScheduledProcessor:
                         self.update_file_status(file_id, 'processed', final_msg, 100)
                         processed_count += 1
                         logger.info(f"🎉 Successfully completed all stages for file: {file_name}")
-                        
+
                         # Log final summary
                         self.log_processing_summary(file_id, file_name)
-                        
+
                     else:
                         # Step 3: Update job status to 'error' and file status to 'failed'
                         error_msg = 'LinkedIn processing failed during scraping stage'
                         self.update_job_status(file_id, 'error', error_message=error_msg)
                         self.update_file_status(file_id, 'failed', error_msg)
                         logger.error(f"❌ Failed to process file: {file_name}")
-                        
+
                 except Exception as e:
                     # Step 3: Update job status to 'error' and file status to 'failed'
                     error_msg = f"Processing error: {str(e)}"
@@ -718,44 +742,42 @@ class EnhancedScheduledProcessor:
         """Update file processing status with detailed progress tracking"""
         try:
             from sqlalchemy import text
-            
-            # Prepare update data with named parameters
+            # Always set user_id to 1 for automated jobs
             update_data = {
                 'status': status,
                 'processed_date': datetime.now(),
-                'file_id': file_id
+                'file_id': file_id,
+                'user_id': 1
             }
-            
             if error_message:
                 update_data['error_message'] = error_message
                 sql = """
                 UPDATE file_upload 
                 SET processing_status = :status, 
                     processed_date = :processed_date,
-                    processing_error = :error_message
+                    processing_error = :error_message,
+                    user_id = :user_id
                 WHERE id = :file_id
                 """
             else:
                 sql = """
                 UPDATE file_upload 
                 SET processing_status = :status, 
-                    processed_date = :processed_date
+                    processed_date = :processed_date,
+                    user_id = :user_id
                 WHERE id = :file_id
                 """
-            
             # Execute update
             if self.db_connection and self.db_connection.manager and self.db_connection.manager.engine:
                 with self.db_connection.manager.engine.connect() as conn:
                     conn.execute(text(sql), update_data)
                     conn.commit()
-                    
                     status_msg = f"✅ Updated file {file_id} status to: {status}"
                     if progress is not None:
                         status_msg += f" (Progress: {progress}%)"
                     logger.info(status_msg)
             else:
                 logger.error(f"❌ Database engine not available for status update")
-                
         except Exception as e:
             logger.error(f"❌ Error updating file status: {str(e)}")
     
@@ -763,26 +785,25 @@ class EnhancedScheduledProcessor:
         """Update processing job status with comprehensive tracking"""
         try:
             from sqlalchemy import text
-            
-            # Prepare job update data
+            # Always set user_id to 1 for automated jobs
             update_data = {
                 'job_status': job_status,
-                'file_upload_id': file_upload_id
+                'file_upload_id': file_upload_id,
+                'user_id': 1
             }
-            
             # Set appropriate timestamps based on status
             if job_status == 'started':
                 update_data['started_at'] = datetime.now()
                 sql = """
                 UPDATE processing_jobs 
-                SET job_status = :job_status, started_at = :started_at
+                SET job_status = :job_status, started_at = :started_at, user_id = :user_id
                 WHERE file_upload_id = :file_upload_id AND job_status IN ('queued', 'processing')
                 """
             elif job_status == 'processing':
                 # Update without changing started_at if already set
                 sql = """
                 UPDATE processing_jobs 
-                SET job_status = :job_status
+                SET job_status = :job_status, user_id = :user_id
                 WHERE file_upload_id = :file_upload_id AND job_status IN ('queued', 'started', 'processing')
                 """
             elif job_status in ['completed', 'processed']:
@@ -790,7 +811,7 @@ class EnhancedScheduledProcessor:
                 update_data['job_status'] = 'completed'  # Standardize to 'completed'
                 sql = """
                 UPDATE processing_jobs 
-                SET job_status = :job_status, completed_at = :completed_at
+                SET job_status = :job_status, completed_at = :completed_at, user_id = :user_id
                 WHERE file_upload_id = :file_upload_id
                 """
             elif job_status == 'error':
@@ -799,29 +820,27 @@ class EnhancedScheduledProcessor:
                     update_data['error_message'] = error_message
                     sql = """
                     UPDATE processing_jobs 
-                    SET job_status = :job_status, completed_at = :completed_at, error_message = :error_message
+                    SET job_status = :job_status, completed_at = :completed_at, error_message = :error_message, user_id = :user_id
                     WHERE file_upload_id = :file_upload_id
                     """
                 else:
                     sql = """
                     UPDATE processing_jobs 
-                    SET job_status = :job_status, completed_at = :completed_at
+                    SET job_status = :job_status, completed_at = :completed_at, user_id = :user_id
                     WHERE file_upload_id = :file_upload_id
                     """
             else:
                 # Default update
                 sql = """
                 UPDATE processing_jobs 
-                SET job_status = :job_status
+                SET job_status = :job_status, user_id = :user_id
                 WHERE file_upload_id = :file_upload_id
                 """
-            
             # Execute job status update
             if self.db_connection and self.db_connection.manager and self.db_connection.manager.engine:
                 with self.db_connection.manager.engine.connect() as conn:
                     result = conn.execute(text(sql), update_data)
                     conn.commit()
-                    
                     if result.rowcount > 0:
                         status_msg = f"✅ Updated job for file {file_upload_id} to: {job_status}"
                         if progress_info:
@@ -831,7 +850,6 @@ class EnhancedScheduledProcessor:
                         logger.warning(f"⚠️ No job found to update for file {file_upload_id}")
             else:
                 logger.error(f"❌ Database engine not available for job status update")
-                
         except Exception as e:
             logger.error(f"❌ Error updating job status: {str(e)}")
 

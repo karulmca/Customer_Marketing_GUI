@@ -1877,8 +1877,8 @@ async def upload_and_process_file(file: UploadFile = File(...), session_id: str 
                 )
                 
                 if file_upload_id:
-                    # Immediately process it with user context
-                    success = file_processor.process_uploaded_file(file_upload_id, user_id=user_id)
+                    # Immediately process it as manual job with user context
+                    success = file_processor.process_uploaded_file_manual(file_upload_id, user_id)
                     
                     # Update processing status based on result
                     async with job_queue_lock:
