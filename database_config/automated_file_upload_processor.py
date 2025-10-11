@@ -1,9 +1,9 @@
 import pandas as pd
 import pytz
 from datetime import datetime
-from database_config.db_utils import get_database_connection
+from .db_utils import get_database_connection
 from config_loader import ConfigLoader
-from database_config.file_upload_processor import FileUploadProcessor
+from .file_upload_processor import FileUploadProcessor
 
 class AutomatedFileUploadProcessor(FileUploadProcessor):
     """
