@@ -7,7 +7,7 @@ import pandas as pd
 import json
 import hashlib
 from typing import Optional, Dict, Any, List
-from .db_utils import get_database_connection
+from database_config.db_utils import get_database_connection
 from config_loader import ConfigLoader
 
 # LinkedIn scraper import (optional)
