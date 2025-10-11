@@ -38,7 +38,7 @@ export const API_ENDPOINTS = {
 // Configuration for axios instances
 export const API_CONFIG = {
   baseURL: API_BASE_URL,
-  timeout: 30000, // 30 seconds
+  timeout: 60000, // 60 seconds
   headers: {
     'Content-Type': 'application/json',
   },
