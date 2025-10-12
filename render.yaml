@@ -41,4 +41,4 @@ services:
         destination: /index.html
     envVars:
       - key: REACT_APP_API_URL
-        value: https://company-scraper-backend.onrender.com/api
+  value: https://company-scraper-backend-90mt.onrender.com/api
