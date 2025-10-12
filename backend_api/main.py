@@ -80,7 +80,7 @@ cors_origins = [
 environment = os.getenv("ENVIRONMENT", "development")
 if environment == "production":
     cors_origins.extend([
-        "https://company-scraper-frontend.onrender.com",
+        "https://company-scraper-backend-90mt.onrender.com",
         # Add any additional production domains here
     ])
 
