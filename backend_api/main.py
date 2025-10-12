@@ -17,7 +17,7 @@ import asyncio
 
 # Add parent directory to path for imports  
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'database_config'))
-from file_upload_processor import FileUploadProcessor
+from database_config.file_upload_processor import FileUploadProcessor
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -62,6 +62,7 @@ app = FastAPI(
 
 # Include MVC routers if available
 if MVC_CONTROLLERS_AVAILABLE:
+    from backend_api.controllers import company_data_router, file_data_router
     app.include_router(company_data_router)
     app.include_router(file_data_router)
     logger.info("✅ MVC controllers registered successfully")
@@ -297,8 +298,8 @@ def _process_pending_uploads():
             "failed": failure_count,
         }
     finally:
-        scheduler_state["running"] = False
         setattr(_process_pending_uploads, "_busy", False)
+        scheduler_state["running"] = False
 
 def _clean_for_json_serialization(obj):
     """Clean data to ensure it can be JSON serialized without encoding errors"""
