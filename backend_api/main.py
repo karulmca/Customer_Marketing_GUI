@@ -854,22 +854,7 @@ async def cleanup_stale_jobs():
     except Exception as e:
         logger.error(f"Error during stale job cleanup: {str(e)}")
 
-# Schedule cleanup every 5 minutes (will be started on app startup)
-cleanup_scheduler = None
-try:
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler
-    cleanup_scheduler = AsyncIOScheduler()
-    cleanup_scheduler.add_job(cleanup_stale_jobs, 'interval', minutes=5, id='cleanup_stale_jobs')
-    logger.info("🧹 Job cleanup scheduler configured (will start on app startup)")
-except ImportError:
-    logger.warning("APScheduler not available for job cleanup")
-
-# Start scheduler on app startup
-@app.on_event("startup")
-async def startup_event():
-    if cleanup_scheduler:
-        cleanup_scheduler.start()
-        logger.info("🧹 Started job cleanup scheduler")
+## Remove duplicate cleanup_scheduler and startup_event logic
 
 # File upload endpoints
 @app.post("/api/files/upload")
