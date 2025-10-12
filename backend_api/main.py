@@ -225,8 +225,11 @@ def _ensure_scheduler():
         raise HTTPException(status_code=500, detail="APScheduler is not installed on the server")
     if scheduler is None:
         scheduler = BackgroundScheduler(timezone="UTC")
-    if not scheduler.running:
-        scheduler.start()
+    # Guard to ensure scheduler is started only once
+    if not getattr(scheduler, "_started_once", False):
+        if not scheduler.running:
+            scheduler.start()
+        scheduler._started_once = True
     return scheduler
 
 def _process_pending_uploads():
