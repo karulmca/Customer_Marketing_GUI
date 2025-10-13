@@ -19,3 +19,4 @@ apscheduler>=3.10.0
 # LinkedIn scraper dependencies
 beautifulsoup4>=4.11.0
 lxml>=4.9.0
+psutil>=5.9.0
