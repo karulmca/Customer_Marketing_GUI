@@ -37,15 +37,15 @@
         ".org-about-company-module__company-size-definition"
     ],
     "scheduler_settings": {
-        "interval_minutes": 30,
-        "max_concurrent_jobs_per_user": 1,
+        "interval_minutes": 3,
+        "max_concurrent_jobs_per_user": 3,
         "job_timeout_minutes": 30,
         "retry_failed_jobs": true,
         "max_retries": 3,
         "cleanup_completed_jobs_days": 7
     },
     "job_processing": {
-        "single_job_per_user": true,
+        "single_job_per_user": false,
         "queue_priority": "first_in_first_out",
         "auto_start_processing": true,
         "max_processing_time_minutes": 60
