@@ -40,8 +40,6 @@ MANIFEST
 venv/
 env/
 ENV/
-
-# IDE
 .vscode/
 .idea/
 *.swp
