@@ -288,19 +288,19 @@ class FileUploadProcessor:
             return False
     
     def get_pending_uploads(self) -> Optional[pd.DataFrame]:
-        """Get all pending file uploads"""
+        """Get a batch of pending file uploads (limit 10)"""
         try:
             if not self.db_connection:
                 return None
-                
+            # Only select necessary columns and limit batch size
             query = """
-                SELECT id, file_name, upload_date, records_count, uploaded_by
-                FROM file_upload 
+                SELECT id, file_name
+                FROM file_upload
                 WHERE processing_status = 'pending'
                 ORDER BY upload_date ASC
+                LIMIT 10
             """
             return self.db_connection.query_to_dataframe(query)
-            
         except Exception as e:
             print(f"Error getting pending uploads: {e}")
             return None
@@ -544,12 +544,13 @@ class FileUploadProcessor:
     
     def process_uploaded_file(self, file_upload_id: str) -> bool:
         """Process an uploaded file and move data to company_data table with LinkedIn scraping"""
+        import gc, psutil, os
         try:
             # Update status to processing at start and mark job as started
             self.update_processing_status(file_upload_id, 'processing')
             self.mark_job_as_started(file_upload_id)
             print(f"🔄 Started processing file_upload_id: {file_upload_id}")
-            
+
             # Get upload data
             upload_info = self.get_upload_data(file_upload_id)
             if not upload_info:
@@ -557,13 +558,13 @@ class FileUploadProcessor:
                 self.mark_job_as_failed(file_upload_id, 'No data found in database')
                 self.update_processing_status(file_upload_id, 'failed', 'No data found in database')
                 return False
-            
+
             raw_data = upload_info['raw_data']
             file_name = upload_info['file_name']
-            
-            # Convert JSON data back to DataFrame
+
+            # Convert JSON data back to DataFrame (if large, consider chunking)
             df = pd.DataFrame(raw_data['data'])
-            
+
             # Apply column mapping
             mapped_df = self.apply_column_mapping(df)
 
@@ -573,6 +574,13 @@ class FileUploadProcessor:
 
             # Add metadata
             mapped_df['file_source'] = file_name
+
+            # ...existing processing logic...
+
+            # Release memory after processing
+            del df, mapped_df, raw_data, upload_info
+            gc.collect()
+            print(f"Memory usage after processing file {file_name}: {psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2:.2f} MB")
             mapped_df['file_upload_id'] = file_upload_id
             mapped_df['created_by'] = 'scheduled_processor'
 
