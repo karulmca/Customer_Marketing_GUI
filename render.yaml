@@ -28,7 +28,7 @@ services:
         value: postgresql
       - key: DB_SSL_MODE
         value: require
-    startCommand: uvicorn backend_api.main:app --host 0.0.0.0 --port 8000 --log-level warning
+    
 
   # Frontend Service
   - type: web
