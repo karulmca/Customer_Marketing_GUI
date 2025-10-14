@@ -2,7 +2,7 @@
 config.json
 .env
 *.env
-node_modules
+
 
 # Logs
 *.log
@@ -45,6 +45,7 @@ ENV/
 .idea/
 *.swp
 *.swo
+node_modules/
 
 # OS
 .DS_Store
