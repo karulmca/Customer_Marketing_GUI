@@ -25,12 +25,13 @@ logger = logging.getLogger(__name__)
 
 class CompanyDataProcessor:
     """Main processor that orchestrates different scrapers"""
-
-    def __init__(self):
+    logger.info(f"file_upload_id to be inserted: {file_upload_id}")
         self.linkedin_scraper = None
         self.revenue_scraper = None
+            # Ensure file_upload_id is set for all rows just before insert
+            db_df['file_upload_id'] = file_upload_id
         self.ai_scraper = None
-
+        
         # Initialize database connection
         try:
             from db_utils import get_database_connection
@@ -320,8 +321,7 @@ class CompanyDataProcessor:
                         'revenue': '',
                         'file_source': 'unknown',
                         'created_by': 'system',
-                        'updated_at': pd.Timestamp.now(),
-                        'file_upload_id': file_upload_id
+                        'updated_at': pd.Timestamp.now()
                     }
                     for col, default in required_defaults.items():
                         if col not in db_df.columns:
