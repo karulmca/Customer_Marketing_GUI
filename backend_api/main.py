@@ -4,13 +4,14 @@ Exposes existing Python functionality as REST APIs for React frontend
 """
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, status, Request
+import os
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
-import os
+
 import sys
 import json
 import asyncio
@@ -305,25 +306,34 @@ def _process_pending_uploads():
 
 def _clean_for_json_serialization(obj):
     """Clean data to ensure it can be JSON serialized without encoding errors"""
+    import numpy as np
     if isinstance(obj, dict):
         return {k: _clean_for_json_serialization(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [_clean_for_json_serialization(item) for item in obj]
     elif isinstance(obj, bytes):
-        # Convert bytes to string with error handling
         try:
             return obj.decode('utf-8')
         except UnicodeDecodeError:
             return obj.decode('utf-8', errors='replace')
     elif isinstance(obj, str):
-        # Ensure string is valid UTF-8
         try:
             obj.encode('utf-8')
             return obj
         except UnicodeEncodeError:
             return obj.encode('utf-8', errors='replace').decode('utf-8')
+    elif isinstance(obj, (np.integer, int)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, float)):
+        return float(obj)
+    elif isinstance(obj, (np.bool_, bool)):
+        return bool(obj)
+    elif hasattr(obj, 'tolist'):
+        return obj.tolist()
+    elif obj is None:
+        return None
     else:
-        return obj
+        return str(obj)
 
 # Pydantic models
 class LoginRequest(BaseModel):
@@ -1802,141 +1812,72 @@ async def upload_and_process_file(file: UploadFile = File(...), session_id: str 
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired session. Please login again."
             )
-        
-        # Get user info from session
-        user_info = session_data.get('user_info', {})
-        username = user_info.get('username', 'Web_User')
-        user_id = user_info.get('id', 0)
-        
-        # Check if user already has a job in progress
-        async with job_queue_lock:
-            if username in user_processing_status:
-                current_job = user_processing_status[username]
-                if current_job['status'] == 'processing':
-                    raise HTTPException(
-                        status_code=409, 
-                        detail=f"You already have a job in progress (started at {current_job['started']}). Please wait for completion."
-                    )
-        
-        # Validate file
-        if not file.filename:
-            raise HTTPException(status_code=400, detail="No file selected")
-        
-        if not file.filename.lower().endswith(('.xlsx', '.xls', '.csv')):
-            raise HTTPException(status_code=400, detail="Only Excel and CSV files are supported")
-        
-        # Read file content
-        file_content = await file.read()
-        
-        # Validate headers before processing
-        validation_result = validate_file_headers(file_content, file.filename)
-        
-        if not validation_result["valid"]:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Invalid file format: {validation_result['error']}"
-            )
-        
-        # Initialize file processor with user context
         try:
-            file_processor = FileUploadProcessor()
-            
-            # Create temporary file for processing
-            import tempfile
-            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as temp_file:
-                temp_file.write(file_content)
-                temp_file_path = temp_file.name
-            
+            # Verify session with enhanced validation
+            session_data = verify_session(session_id)
+            if not session_data:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid or expired session. Please login again."
+                )
+            # Get user info from session
+            user_info = session_data.get('user_info', {})
+            username = user_info.get('username', 'Web_User')
+            user_id = user_info.get('id', 0)
+            # Validate file
+            if not file.filename:
+                raise HTTPException(status_code=400, detail="No file selected")
+            if not file.filename.lower().endswith(('.xlsx', '.xls', '.csv')):
+                raise HTTPException(status_code=400, detail="Only Excel and CSV files are supported")
+            file_content = await file.read()
+            validation_result = validate_file_headers(file_content, file.filename)
+            if not validation_result["valid"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid file format: {validation_result['error']}"
+                )
+            file_processor = None
+            temp_file_path = None
             try:
-                # Mark user as processing
-                async with job_queue_lock:
-                    user_processing_status[username] = {
-                        'status': 'processing',
-                        'filename': file.filename,
-                        'started': datetime.now().isoformat(),
-                        'user_id': user_id,
-                        'operation': 'upload_and_process'
-                    }
-                
-                logger.info(f"🚀 Starting upload and process for user {username}: {file.filename}")
-                
-                # Upload as JSON with user context
+                file_processor = FileUploadProcessor()
+                import tempfile
+                with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as temp_file:
+                    temp_file.write(file_content)
+                    temp_file_path = temp_file.name
                 file_upload_id = file_processor.upload_file_as_json(
-                    temp_file_path, 
+                    temp_file_path,
                     uploaded_by=username,
                     original_filename=file.filename
                 )
-                
                 if file_upload_id:
-                    # Immediately process it with user context
-                    success = file_processor.process_uploaded_file(file_upload_id, user_id=user_id)
-                    
-                    # Update processing status based on result
-                    async with job_queue_lock:
-                        if username in user_processing_status:
-                            user_processing_status[username]['status'] = 'completed' if success else 'failed'
-                            user_processing_status[username]['completed'] = datetime.now().isoformat()
-                            user_processing_status[username]['file_upload_id'] = file_upload_id
-                    
-                    if success:
-                        logger.info(f"✅ Upload and processing completed for user {username}: {file.filename} (ID: {file_upload_id})")
-                        return {
-                            "success": True,
-                            "file_upload_id": file_upload_id,
-                            "message": f"File uploaded and processed successfully (ID: {file_upload_id})",
-                            "filename": file.filename,
-                            "status": "completed",
-                            "processed_by": username
-                        }
-                    else:
-                        logger.warning(f"⚠️ Upload successful but processing failed for user {username}: {file.filename} (ID: {file_upload_id})")
-                        return {
-                            "success": False,
-                            "file_upload_id": file_upload_id,
-                            "message": f"File uploaded but processing failed (ID: {file_upload_id})",
-                            "filename": file.filename,
-                            "status": "processing_failed",
-                            "processed_by": username
-                        }
+                    # Create a processing job (status: pending)
+                    file_processor.create_processing_job(file_upload_id, job_type="data_extraction", uploaded_by=username)
+                    response = {
+                        "success": True,
+                        "file_upload_id": file_upload_id,
+                        "message": f"File uploaded successfully (ID: {file_upload_id})",
+                        "filename": file.filename,
+                        "status": "pending",
+                        "processed_by": username
+                    }
+                    from backend_api.main import _clean_for_json_serialization
+                    return _clean_for_json_serialization(response)
                 else:
-                    # Mark as failed
-                    async with job_queue_lock:
-                        if username in user_processing_status:
-                            user_processing_status[username]['status'] = 'failed'
-                            user_processing_status[username]['error'] = 'Failed to upload file as JSON'
-                    
                     raise HTTPException(status_code=500, detail="Failed to upload file as JSON")
-                    
             except Exception as e:
-                # Clear processing status on error
-                async with job_queue_lock:
-                    if username in user_processing_status:
-                        user_processing_status[username]['status'] = 'failed'
-                        user_processing_status[username]['error'] = str(e)
-                        user_processing_status[username]['completed'] = datetime.now().isoformat()
-                raise
-                
+                logger.error(f"❌ File processor error: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"File processor error: {str(e)}")
             finally:
-                # Clean up temp file
-                try:
-                    os.unlink(temp_file_path)
-                except:
-                    pass
-                    
-        except ImportError as e:
-            raise HTTPException(status_code=500, detail=f"File processor not available: {e}")
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Upload and processing failed for user {username if 'username' in locals() else 'unknown'}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Upload and processing failed: {str(e)}")
-
-@app.get("/api/files/processing-status")
-async def get_processing_status(session_id: str):
-    """Get current processing status for the user"""
-    try:
-        # Verify session with enhanced validation
+                # Clean up temp file if created
+                if temp_file_path:
+                    try:
+                        # 'os' is already imported globally
+                        os.unlink(temp_file_path)
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.error(f"❌ Error in upload_and_process_file: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Upload and process error: {str(e)}")
         session_data = verify_session(session_id)
         if not session_data:
             raise HTTPException(
@@ -1977,10 +1918,15 @@ async def get_processing_status(session_id: str):
 @app.get("/api/files/uploads")
 async def get_uploaded_files(session_id: str):
     """Get list of uploaded files from file_upload table with enhanced session validation"""
+    import time
+    start_time = time.time()
+    logger.info(f"[UPLOADS] Request received for session_id={session_id} at {start_time}")
     try:
         # Verify session with enhanced validation
         session_data = verify_session(session_id)
+        logger.info(f"[UPLOADS] Session verified for session_id={session_id}")
         if not session_data:
+            logger.warning(f"[UPLOADS] Invalid session for session_id={session_id}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired session. Please login again."
@@ -1993,9 +1939,11 @@ async def get_uploaded_files(session_id: str):
 
             db_config = PostgreSQLConfig()
             connection_params = db_config.get_connection_params()
+            logger.info(f"[UPLOADS] Connecting to database...")
             connection = psycopg2.connect(**connection_params)
 
             cursor = connection.cursor()
+            logger.info(f"[UPLOADS] Executing SQL query...")
             cursor.execute(
                 """
                 SELECT fu.id, fu.file_name, fu.upload_date, fu.uploaded_by, fu.processing_status, 
@@ -2007,17 +1955,19 @@ async def get_uploaded_files(session_id: str):
                 LEFT JOIN company_data cd ON fu.id = cd.file_upload_id
                 GROUP BY fu.id, fu.file_name, fu.upload_date, fu.uploaded_by, fu.processing_status, fu.records_count
                 ORDER BY fu.upload_date DESC 
-                LIMIT 50
+                LIMIT 10
                 """
             )
 
             rows = cursor.fetchall()
+            logger.info(f"[UPLOADS] Query returned {len(rows)} rows.")
             cursor.close()
             connection.close()
+            logger.info(f"[UPLOADS] Database connection closed.")
 
             files = []
             for r in rows:
-                files.append({
+                file_info = {
                     "id": r[0],
                     "filename": r[1],
                     "file_name": r[1],  # Add both variants for compatibility
@@ -2029,22 +1979,26 @@ async def get_uploaded_files(session_id: str):
                     "records_count": r[6],  # Actual count from company_data table
                     "processed_count": r[7],
                     "failed_count": r[8]
-                })
+                }
+                # Clean all values for JSON serialization
+                from backend_api.main import _clean_for_json_serialization
+                files.append(_clean_for_json_serialization(file_info))
 
+            elapsed = time.time() - start_time
+            logger.info(f"[UPLOADS] Returning {len(files)} files after {elapsed:.2f} seconds.")
             return {"files": files, "count": len(files)}
 
         except ImportError as e:
-            # If database layer isn't available, return an empty list rather than mock data
-            logger.warning(f"Database module not available for uploads list: {e}")
+            logger.warning(f"[UPLOADS] Database module not available for uploads list: {e}")
             return {"files": [], "count": 0, "error": str(e)}
         except Exception as e:
-            # On any DB error, return empty list so UI reflects no data when DB is empty/unreachable
-            logger.exception("Failed to query uploaded files from database")
+            logger.exception(f"[UPLOADS] Failed to query uploaded files from database: {e}")
             return {"files": [], "count": 0, "error": str(e)}
-            
-    except HTTPException:
+    except HTTPException as e:
+        logger.error(f"[UPLOADS] HTTPException: {e}")
         raise
     except Exception as e:
+        logger.error(f"[UPLOADS] Exception: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get uploaded files: {str(e)}")
 
 @app.delete("/api/files/{file_id}")
@@ -2586,7 +2540,6 @@ async def startup_event():
                     scheduler_state["last_error"] = str(e)
             else:
                 logger.warning("⚠️ APScheduler not available - jobs will need to be processed manually")
-                
     except Exception as e:
         logger.error(f"❌ Failed to auto-start scheduler: {e}")
 

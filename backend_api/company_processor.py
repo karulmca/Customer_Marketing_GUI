@@ -25,13 +25,12 @@ logger = logging.getLogger(__name__)
 
 class CompanyDataProcessor:
     """Main processor that orchestrates different scrapers"""
-    logger.info(f"file_upload_id to be inserted: {file_upload_id}")
+
+    def __init__(self):
         self.linkedin_scraper = None
         self.revenue_scraper = None
-            # Ensure file_upload_id is set for all rows just before insert
-            db_df['file_upload_id'] = file_upload_id
         self.ai_scraper = None
-        
+
         # Initialize database connection
         try:
             from db_utils import get_database_connection
@@ -220,7 +219,12 @@ class CompanyDataProcessor:
                         file_upload_id = None
                     # ...existing code for column mapping and filtering...
                     # Ensure file_upload_id is set for all rows just before insert
-                    db_df['file_upload_id'] = file_upload_id
+                    if not file_upload_id:
+                        logger.error(f"❌ file_upload_id could not be determined for filename '{filename}'. Skipping company_data insert.")
+                        db_save_error = "file_upload_id missing"
+                        saved_to_db = False
+                    else:
+                        db_df['file_upload_id'] = file_upload_id
                     
                     # Map columns to match database schema - prioritizing standardized template format
                     column_mapping = {
@@ -308,7 +312,9 @@ class CompanyDataProcessor:
                         'processing_status', 'scraped_at', 'data_source', 'created_by', 'updated_at'
                     ]
                     
-                    # Keep only valid columns, drop others
+                    # Add file_upload_id to valid columns if not present
+                    if 'file_upload_id' not in valid_columns:
+                        valid_columns.append('file_upload_id')
                     columns_to_keep = [col for col in db_df.columns if col in valid_columns]
                     db_df = db_df[columns_to_keep]
                     # Ensure all required columns exist, add with default values if missing
@@ -321,7 +327,8 @@ class CompanyDataProcessor:
                         'revenue': '',
                         'file_source': 'unknown',
                         'created_by': 'system',
-                        'updated_at': pd.Timestamp.now()
+                        'updated_at': pd.Timestamp.now(),
+                        'file_upload_id': file_upload_id
                     }
                     for col, default in required_defaults.items():
                         if col not in db_df.columns:
@@ -338,8 +345,11 @@ class CompanyDataProcessor:
                     
                     logger.info(f"Prepared {len(db_df)} records with columns: {list(db_df.columns)}")
                     
-                    # Insert data into company_data table
-                    saved_to_db = self.db_connection.insert_dataframe(db_df, "company_data")
+                    # Insert data into company_data table only if file_upload_id is present
+                    if file_upload_id:
+                        saved_to_db = self.db_connection.insert_dataframe(db_df, "company_data")
+                    else:
+                        saved_to_db = False
                     
                     if saved_to_db:
                         logger.info(f"✅ Successfully saved {len(db_df)} company records to database")
@@ -379,10 +389,13 @@ class CompanyDataProcessor:
             return result
             
         except Exception as e:
-            logger.error(f"Processing failed: {str(e)}")
+            import traceback
+            tb = traceback.format_exc()
+            logger.error(f"Processing failed: {str(e)}\nTraceback:\n{tb}")
             return {
                 "success": False,
                 "error": str(e),
+                "traceback": tb,
                 "processed_rows": 0,
                 "successful_rows": 0,
                 "failed_rows": 0,

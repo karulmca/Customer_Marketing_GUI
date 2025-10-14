@@ -37,7 +37,7 @@
         ".org-about-company-module__company-size-definition"
     ],
     "scheduler_settings": {
-        "interval_minutes": 3,
+        "interval_minutes": 30,
         "max_concurrent_jobs_per_user": 3,
         "job_timeout_minutes": 30,
         "retry_failed_jobs": true,

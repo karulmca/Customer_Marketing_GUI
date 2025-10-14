@@ -223,7 +223,12 @@ class FileUploadProcessor:
         try:
             if not self.db_connection:
                 return False
-            
+            # Prevent duplicate jobs for the same file_upload_id
+            check_query = f"SELECT id FROM processing_jobs WHERE file_upload_id = '{file_upload_id}' AND job_status IN ('queued', 'processing', 'pending')"
+            existing_jobs = self.db_connection.query_to_dataframe(check_query)
+            if existing_jobs is not None and not existing_jobs.empty:
+                print(f"⚠️ Job already exists for file_upload_id {file_upload_id}, skipping duplicate job creation.")
+                return False
             # Get uploaded_by from file_upload table if not provided
             if not uploaded_by:
                 upload_info_query = f"SELECT uploaded_by FROM file_upload WHERE id = '{file_upload_id}'"
@@ -232,10 +237,8 @@ class FileUploadProcessor:
                     uploaded_by = upload_info.iloc[0]['uploaded_by']
                 else:
                     uploaded_by = 'unknown_user'
-                
             # Use consistent timestamp format
             current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            
             job_data = pd.DataFrame([{
                 'job_type': job_type,
                 'file_upload_id': file_upload_id,
@@ -252,17 +255,14 @@ class FileUploadProcessor:
                 'retry_count': 0,
                 'max_retries': self.config.get_max_retries()
             }])
-            
             job_success = self.db_connection.insert_dataframe(job_data, "processing_jobs")
-            
             if job_success:
                 # Ensure file_upload table is also marked as pending (should already be, but ensure sync)
                 try:
                     file_query = f"""
                         UPDATE file_upload 
                         SET processing_status = 'pending',
-                            updated_at = '{current_time}',
-                            user_id = {user_id}
+                            updated_at = '{current_time}'
                         WHERE id = '{file_upload_id}' AND processing_status != 'pending'
                     """
                     self.db_connection.execute_query(file_query)
@@ -271,18 +271,15 @@ class FileUploadProcessor:
                     if "updated_at" in str(e):
                         file_query = f"""
                             UPDATE file_upload 
-                            SET processing_status = 'pending',
-                                user_id = {user_id}
+                            SET processing_status = 'pending'
                             WHERE id = '{file_upload_id}' AND processing_status != 'pending'
                         """
                         self.db_connection.execute_query(file_query)
-                
                 print(f"✅ Processing job created and status synced for file_upload_id: {file_upload_id} (user: {uploaded_by})")
                 return True
             else:
                 print(f"❌ Failed to create processing job for file_upload_id: {file_upload_id}")
                 return False
-            
         except Exception as e:
             print(f"Error creating processing job: {e}")
             return False
@@ -542,14 +539,21 @@ class FileUploadProcessor:
             print(f"❌ LinkedIn scraping error: {e}")
             return 0
     
-    def process_uploaded_file(self, file_upload_id: str) -> bool:
+    def process_uploaded_file(self, file_upload_id: str, user_id: str = None) -> bool:
         """Process an uploaded file and move data to company_data table with LinkedIn scraping"""
         import gc, psutil, os
         try:
             # Update status to processing at start and mark job as started
-            self.update_processing_status(file_upload_id, 'processing')
-            self.mark_job_as_started(file_upload_id)
-            print(f"🔄 Started processing file_upload_id: {file_upload_id}")
+            # If user_id is provided, use it for uploaded_by
+            if user_id:
+                # Use user_id as the username of the logged-in person
+                self.update_processing_status(file_upload_id, 'processing', uploaded_by=user_id)
+                self.mark_job_as_started(file_upload_id, uploaded_by=user_id)
+                print(f"🔄 Started processing file_upload_id: {file_upload_id} (user: {user_id})")
+            else:
+                self.update_processing_status(file_upload_id, 'processing')
+                self.mark_job_as_started(file_upload_id)
+                print(f"🔄 Started processing file_upload_id: {file_upload_id}")
 
             # Get upload data
             upload_info = self.get_upload_data(file_upload_id)
@@ -577,37 +581,41 @@ class FileUploadProcessor:
 
             # ...existing processing logic...
 
-            # Release memory after processing
-            del df, mapped_df, raw_data, upload_info
-            gc.collect()
-            print(f"Memory usage after processing file {file_name}: {psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2:.2f} MB")
-            mapped_df['file_upload_id'] = file_upload_id
-            mapped_df['created_by'] = 'scheduled_processor'
-
             # Insert into company_data table first
-            success = self.db_connection.insert_dataframe(mapped_df, "company_data")
-            
+            try:
+                mapped_df['file_upload_id'] = file_upload_id
+                mapped_df['created_by'] = 'scheduled_processor'
+                success = self.db_connection.insert_dataframe(mapped_df, "company_data")
+            except Exception as df_error:
+                self.sync_processing_completion(file_upload_id, 'failed', 0, f'Database insertion failed: {df_error}')
+                print(f"❌ Database insertion failed: {df_error}")
+                return False
+
             if not success:
                 self.sync_processing_completion(file_upload_id, 'failed', 0, 'Database insertion failed')
                 return False
-            
+
             # Update status to scraping
             self.update_processing_status(file_upload_id, 'processing', 'LinkedIn scraping in progress')
             print(f"🔍 Starting LinkedIn scraping for file_upload_id: {file_upload_id}")
-            
+
             # Perform LinkedIn scraping if available
             scraped_count = 0
             if LINKEDIN_SCRAPER_AVAILABLE:
                 scraped_count = self._perform_linkedin_scraping(file_upload_id, mapped_df)
             else:
                 print("⚠️ LinkedIn scraper not available, skipping scraping step")
-            
+
             # Update all three tables for complete sync and mark job as completed
             self.mark_job_as_completed(file_upload_id, len(mapped_df))
             self.sync_processing_completion(file_upload_id, 'completed', len(mapped_df), f'Successfully processed and scraped {scraped_count} companies')
             print(f"✅ Successfully processed file_upload_id: {file_upload_id} (scraped: {scraped_count})")
+
+            # Release memory after processing
+            del df, mapped_df, raw_data, upload_info
+            gc.collect()
+            print(f"Memory usage after processing file {file_name}: {psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2:.2f} MB")
             return True
-                
         except Exception as e:
             error_msg = f"Processing error: {str(e)}"
             self.mark_job_as_failed(file_upload_id, error_msg)
@@ -615,7 +623,7 @@ class FileUploadProcessor:
             print(f"❌ {error_msg}")
             return False
     
-    def mark_job_as_started(self, file_upload_id: str) -> bool:
+    def mark_job_as_started(self, file_upload_id: str, uploaded_by: str = None) -> bool:
         """Mark processing job as started and sync across all tables"""
         try:
             if not self.db_connection:
@@ -625,13 +633,10 @@ class FileUploadProcessor:
             current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
             # 1. Update processing_jobs table
-            job_query = f"""
-                UPDATE processing_jobs 
-                SET job_status = 'processing',
-                    started_at = '{current_time}',
-                    updated_at = '{current_time}'
-                WHERE file_upload_id = '{file_upload_id}'
-            """
+            set_clause = f"job_status = 'processing', started_at = '{current_time}', updated_at = '{current_time}'"
+            if uploaded_by:
+                set_clause += f", uploaded_by = '{uploaded_by}'"
+            job_query = f"UPDATE processing_jobs SET {set_clause} WHERE file_upload_id = '{file_upload_id}'"
             job_success = self.db_connection.execute_query(job_query)
             
             # 2. Update file_upload table to sync status
@@ -640,7 +645,7 @@ class FileUploadProcessor:
                     UPDATE file_upload 
                     SET processing_status = 'processing',
                         updated_at = '{current_time}',
-                        user_id = {user_id}
+                        user_id = user_id
                     WHERE id = '{file_upload_id}'
                 """
                 file_success = self.db_connection.execute_query(file_query)
@@ -650,7 +655,7 @@ class FileUploadProcessor:
                     file_query = f"""
                         UPDATE file_upload 
                         SET processing_status = 'processing',
-                            user_id = {user_id}
+                                user_id = user_id
                         WHERE id = '{file_upload_id}'
                     """
                     file_success = self.db_connection.execute_query(file_query)
@@ -705,7 +710,7 @@ class FileUploadProcessor:
                         processed_date = '{current_time}',
                         processed_records = {processed_records},
                         updated_at = '{current_time}',
-                        user_id = {user_id}
+                        user_id = user_id
                     WHERE id = '{file_upload_id}'
                 """
                 file_success = self.db_connection.execute_query(file_query)
@@ -717,7 +722,7 @@ class FileUploadProcessor:
                         SET processing_status = 'completed',
                             processed_date = '{current_time}',
                             processed_records = {processed_records},
-                            user_id = {user_id}
+                            user_id = user_id
                         WHERE id = '{file_upload_id}'
                     """
                     file_success = self.db_connection.execute_query(file_query)
@@ -925,7 +930,7 @@ class FileUploadProcessor:
             print(f"Error syncing processing completion: {e}")
             return False
 
-    def update_processing_status(self, file_upload_id: str, status: str, error_message: str = None):
+    def update_processing_status(self, file_upload_id: str, status: str, error_message: str = None, uploaded_by: str = None):
         """Update processing status of a file upload (legacy method - use sync_processing_completion for full sync)"""
         try:
             if not self.db_connection:
@@ -939,9 +944,10 @@ class FileUploadProcessor:
                 'processing_status': status,
                 'processed_date': current_time
             }
-            
             if error_message:
                 update_fields['processing_error'] = error_message[:500]  # Limit error message length
+            if uploaded_by:
+                update_fields['uploaded_by'] = uploaded_by
             
             # Create update query
             set_clause = ", ".join([f"{k} = '{v}'" for k, v in update_fields.items()])
@@ -959,18 +965,18 @@ class FileUploadProcessor:
         except Exception as e:
             print(f"Error updating processing status: {e}")
             return False
-    
-    def get_upload_statistics(self) -> Dict[str, Any]:
-        """Get statistics about file uploads"""
         try:
-            if not self.db_connection:
-                return {}
-                
-            stats = {}
-            
-            # Total uploads
-            result = self.db_connection.query_to_dataframe("SELECT COUNT(*) as count FROM file_upload")
-            stats['total_uploads'] = int(result.iloc[0]['count']) if result is not None and not result.empty else 0
+            # Update status to processing at start and mark job as started
+            # If user_id is provided, use it for uploaded_by
+            if user_id:
+                # Use user_id as the username of the logged-in person
+                self.update_processing_status(file_upload_id, 'processing', uploaded_by=user_id)
+                self.mark_job_as_started(file_upload_id, uploaded_by=user_id)
+                print(f"🔄 Started processing file_upload_id: {file_upload_id} (user: {user_id})")
+            else:
+                self.update_processing_status(file_upload_id, 'processing')
+                self.mark_job_as_started(file_upload_id)
+                print(f"🔄 Started processing file_upload_id: {file_upload_id}")
             
             # Pending uploads
             result = self.db_connection.query_to_dataframe("SELECT COUNT(*) as count FROM file_upload WHERE processing_status = 'pending'")
