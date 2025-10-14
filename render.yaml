@@ -28,8 +28,9 @@ services:
         value: postgresql
       - key: DB_SSL_MODE
         value: require
+    startCommand: uvicorn backend_api.main:app --host 0.0.0.0 --port 8000 --log-level warning
 
-  # Frontend Service  
+  # Frontend Service
   - type: web
     name: company-scraper-frontend
     env: static
@@ -41,4 +42,4 @@ services:
         destination: /index.html
     envVars:
       - key: REACT_APP_API_URL
-  value: https://company-scraper-backend-90mt.onrender.com/api
+        value: https://company-scraper-backend-90mt.onrender.com/api
