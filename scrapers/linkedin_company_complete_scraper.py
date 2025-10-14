@@ -163,13 +163,11 @@ class CompleteCompanyScraper:
             company_size = self._extract_size_multiple_strategies(soup)
             if company_size:
                 result['company_size'] = company_size
-                logger.info(f"Company size extracted: {company_size}")
             
             # Extract industry (existing working logic)
             industry = self._extract_industry_multiple_strategies(soup)
             if industry:
                 result['industry'] = industry
-                logger.info(f"Industry extracted: {industry}")
             
             if company_size or industry:
                 result['linkedin_status'] = 'Success'

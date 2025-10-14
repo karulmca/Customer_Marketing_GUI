@@ -144,7 +144,6 @@ class PostgreSQLConfig:
             cursor.close()
             conn.close()
             
-            logger.info(f"✅ PostgreSQL connection successful: {version}")
             return True
             
         except Exception as e:
@@ -191,7 +190,6 @@ class PostgreSQLConfig:
             with self.engine.connect() as conn:
                 result = conn.execute(text("SELECT version()"))
                 version = result.fetchone()[0]
-                logger.info(f"✅ SQLAlchemy engine created: {version}")
             
             # Create session factory
             self.Session = sessionmaker(bind=self.engine)
