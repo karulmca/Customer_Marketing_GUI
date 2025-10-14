@@ -1,3 +1,4 @@
+
 """
 Company Data Processing Pipeline
 Integrates various scrapers for comprehensive company data extraction
@@ -24,12 +25,12 @@ logger = logging.getLogger(__name__)
 
 class CompanyDataProcessor:
     """Main processor that orchestrates different scrapers"""
-    
+
     def __init__(self):
         self.linkedin_scraper = None
         self.revenue_scraper = None
         self.ai_scraper = None
-        
+
         # Initialize database connection
         try:
             from db_utils import get_database_connection
@@ -202,6 +203,23 @@ class CompanyDataProcessor:
                     db_df['data_source'] = 'automated_scraping'
                     db_df['created_by'] = 'CompanyDataProcessor'
                     db_df['updated_at'] = pd.Timestamp.now()
+
+                    # Fetch file_upload_id from file_upload table using filename
+                    file_upload_id = None
+                    try:
+                        from sqlalchemy import text
+                        query = text("SELECT id FROM file_upload WHERE file_name = :filename ORDER BY upload_date DESC LIMIT 1")
+                        with self.db_connection.manager.engine.connect() as conn:
+                            result = conn.execute(query, {"filename": filename})
+                            row = result.fetchone()
+                            if row:
+                                file_upload_id = row[0]
+                    except Exception as e:
+                        logger.error(f"Failed to fetch file_upload_id for filename '{filename}': {e}")
+                        file_upload_id = None
+                    # ...existing code for column mapping and filtering...
+                    # Ensure file_upload_id is set for all rows just before insert
+                    db_df['file_upload_id'] = file_upload_id
                     
                     # Map columns to match database schema - prioritizing standardized template format
                     column_mapping = {
@@ -292,6 +310,31 @@ class CompanyDataProcessor:
                     # Keep only valid columns, drop others
                     columns_to_keep = [col for col in db_df.columns if col in valid_columns]
                     db_df = db_df[columns_to_keep]
+                    # Ensure all required columns exist, add with default values if missing
+                    required_defaults = {
+                        'company_name': '',
+                        'linkedin_url': '',
+                        'company_website': '',
+                        'company_size': '',
+                        'industry': '',
+                        'revenue': '',
+                        'file_source': 'unknown',
+                        'created_by': 'system',
+                        'updated_at': pd.Timestamp.now(),
+                        'file_upload_id': file_upload_id
+                    }
+                    for col, default in required_defaults.items():
+                        if col not in db_df.columns:
+                            db_df[col] = default
+                            # Reorder columns to match table
+                            ordered_columns = [
+                                'company_name', 'linkedin_url', 'company_website', 'company_size', 'industry',
+                                'revenue', 'file_source', 'created_by', 'updated_at', 'file_upload_id'
+                            ]
+                            db_df = db_df[[col for col in ordered_columns if col in db_df.columns]]
+
+                            # Log file_upload_id value before insert
+                            logger.info(f"file_upload_id to be inserted: {file_upload_id}")
                     
                     logger.info(f"Prepared {len(db_df)} records with columns: {list(db_df.columns)}")
                     
