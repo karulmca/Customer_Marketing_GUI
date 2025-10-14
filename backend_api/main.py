@@ -27,6 +27,8 @@ import uuid
 import logging
 import threading as _threading
 
+print(f"Deploying commit: {os.getenv('GIT_COMMIT', 'unknown')}")
+
 # APScheduler for background scheduled jobs
 try:
     from apscheduler.schedulers.background import BackgroundScheduler
@@ -1920,13 +1922,10 @@ async def get_uploaded_files(session_id: str):
     """Get list of uploaded files from file_upload table with enhanced session validation"""
     import time
     start_time = time.time()
-    logger.info(f"[UPLOADS] Request received for session_id={session_id} at {start_time}")
     try:
         # Verify session with enhanced validation
         session_data = verify_session(session_id)
-        logger.info(f"[UPLOADS] Session verified for session_id={session_id}")
         if not session_data:
-            logger.warning(f"[UPLOADS] Invalid session for session_id={session_id}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired session. Please login again."
@@ -1939,11 +1938,9 @@ async def get_uploaded_files(session_id: str):
 
             db_config = PostgreSQLConfig()
             connection_params = db_config.get_connection_params()
-            logger.info(f"[UPLOADS] Connecting to database...")
             connection = psycopg2.connect(**connection_params)
 
             cursor = connection.cursor()
-            logger.info(f"[UPLOADS] Executing SQL query...")
             cursor.execute(
                 """
                 SELECT fu.id, fu.file_name, fu.upload_date, fu.uploaded_by, fu.processing_status, 
@@ -1960,10 +1957,8 @@ async def get_uploaded_files(session_id: str):
             )
 
             rows = cursor.fetchall()
-            logger.info(f"[UPLOADS] Query returned {len(rows)} rows.")
             cursor.close()
             connection.close()
-            logger.info(f"[UPLOADS] Database connection closed.")
 
             files = []
             for r in rows:
@@ -1985,20 +1980,15 @@ async def get_uploaded_files(session_id: str):
                 files.append(_clean_for_json_serialization(file_info))
 
             elapsed = time.time() - start_time
-            logger.info(f"[UPLOADS] Returning {len(files)} files after {elapsed:.2f} seconds.")
             return {"files": files, "count": len(files)}
 
         except ImportError as e:
-            logger.warning(f"[UPLOADS] Database module not available for uploads list: {e}")
             return {"files": [], "count": 0, "error": str(e)}
         except Exception as e:
-            logger.exception(f"[UPLOADS] Failed to query uploaded files from database: {e}")
             return {"files": [], "count": 0, "error": str(e)}
     except HTTPException as e:
-        logger.error(f"[UPLOADS] HTTPException: {e}")
         raise
     except Exception as e:
-        logger.error(f"[UPLOADS] Exception: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get uploaded files: {str(e)}")
 
 @app.delete("/api/files/{file_id}")
