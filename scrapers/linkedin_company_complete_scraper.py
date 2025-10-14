@@ -167,7 +167,8 @@ class CompleteCompanyScraper:
             # Extract industry (existing working logic)
             industry = self._extract_industry_multiple_strategies(soup)
             if industry:
-                result['industry'] = industry
+                # Truncate industry to 500 characters to match DB constraints
+                result['industry'] = str(industry)[:500]
             
             if company_size or industry:
                 result['linkedin_status'] = 'Success'

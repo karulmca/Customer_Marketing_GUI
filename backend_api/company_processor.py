@@ -342,6 +342,10 @@ class CompanyDataProcessor:
 
                             # Log file_upload_id value before insert
                             logger.info(f"file_upload_id to be inserted: {file_upload_id}")
+
+                    # Truncate 'industry' column to 500 characters to prevent DB errors
+                    if 'industry' in db_df.columns:
+                        db_df['industry'] = db_df['industry'].astype(str).str.slice(0, 500)
                     
                     logger.info(f"Prepared {len(db_df)} records with columns: {list(db_df.columns)}")
                     
