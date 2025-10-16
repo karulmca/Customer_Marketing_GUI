@@ -4,8 +4,8 @@
  */
 
 // Base API URL - configured via environment variables
-//const API_BASE_URL = 'http://localhost:8000/api';
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://company-scraper-backend-90mt.onrender.com/api';
+const API_BASE_URL = 'http://localhost:8000/api';
+//const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://company-scraper-backend-90mt.onrender.com/api';
 
 export { API_BASE_URL };
 

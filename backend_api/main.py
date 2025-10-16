@@ -462,8 +462,7 @@ async def login(request: LoginRequest, req: Request):
 async def register(request: RegisterRequest):
     """Register new user endpoint"""
     try:
-        result = auth_system.register(request.username, request.password, request.email)
-        
+        result = auth_system.register_user(request.username, request.password, request.email)
         if result['success']:
             return {
                 "success": True,
@@ -477,8 +476,8 @@ async def register(request: RegisterRequest):
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Registration error: {str(e)}"
-        )
+            detail=f"Registration error: {str(e)}")
+        
 
 @app.post("/api/auth/logout")
 async def logout(session_id: str):
@@ -1016,22 +1015,22 @@ async def upload_file(
         )
         
     except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Upload error: {str(e)}"
-        )
-
-@app.post("/api/files/process/{file_id}")
-async def process_file(
-    file_id: str,
-    session_id: str,
-    scraping_enabled: bool = True,
-    ai_analysis_enabled: bool = False
-):
-    """Start file processing in background"""
-    try:
+        try:
+            result = auth_system.register_user(request.username, request.password, request.email)
+            if result['success']:
+                return {
+                    "success": True,
+                    "message": "User registered successfully"
+                }
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=result.get('message', 'Registration failed')
+                )
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Registration error: {str(e)}")
         # Verify session
         session = verify_session(session_id)
         

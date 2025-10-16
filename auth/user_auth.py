@@ -23,6 +23,9 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 class UserAuthenticator:
+    def register_user(self, username: str, password: str, email: str = None, role: str = "user") -> Dict[str, Any]:
+        """Register a new user (alias for create_user)"""
+        return self.create_user(username, password, email, role)
     """Handles user authentication and session management with PostgreSQL"""
     
     def __init__(self):
