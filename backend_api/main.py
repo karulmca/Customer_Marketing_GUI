@@ -1802,6 +1802,85 @@ async def upload_file_as_json(file: UploadFile = File(...), session_id: str = ""
         logger.error(f"Upload failed for user {username if 'username' in locals() else 'unknown'}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
+
+@app.post("/api/files/process/{file_id}")
+async def process_existing_file(file_id: str, session_id: str, scraping_enabled: bool = True, ai_analysis_enabled: bool = False):
+    """Start processing for an already-uploaded file (by file_upload_id)"""
+    try:
+        # Verify session
+        session = verify_session(session_id)
+        if not session:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
+
+        # Load raw file content from database
+        from database_config.postgresql_config import PostgreSQLConfig
+        import psycopg2
+
+        db_config = PostgreSQLConfig()
+        conn_params = db_config.get_connection_params()
+        conn = psycopg2.connect(**conn_params)
+        cursor = conn.cursor()
+        cursor.execute("SELECT raw_data, filename FROM file_upload WHERE id = %s", (file_id,))
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+
+        if not row or not row[0]:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Uploaded file not found or no raw data available")
+
+        raw_data = row[0]
+        filename = row[1] or 'uploaded_file.xlsx'
+
+        # Create in-memory job
+        job_id = str(uuid.uuid4())
+        processing_jobs[file_id] = {
+            "id": job_id,
+            "file_id": file_id,
+            "filename": filename,
+            "status": "processing",
+            "progress": 0,
+            "message": "Processing started",
+            "file_content": raw_data,
+            "result": None
+        }
+
+        # Start processing in background thread
+        def _start():
+            try:
+                sys.path.insert(0, os.path.dirname(__file__))
+                from company_processor import CompanyDataProcessor
+                processor = CompanyDataProcessor()
+
+                def update_progress(percent, message):
+                    processing_jobs[file_id]["progress"] = percent
+                    processing_jobs[file_id]["message"] = message
+
+                result = processor.process_file(
+                    file_content=raw_data,
+                    filename=filename,
+                    scraping_enabled=scraping_enabled,
+                    ai_analysis_enabled=ai_analysis_enabled,
+                    progress_callback=update_progress
+                )
+
+                processing_jobs[file_id]["result"] = result
+                processing_jobs[file_id]["progress"] = 100
+                processing_jobs[file_id]["status"] = "completed" if result.get("success") else "failed"
+                processing_jobs[file_id]["message"] = result.get("summary", "Processing finished")
+            except Exception as e:
+                processing_jobs[file_id]["status"] = "failed"
+                processing_jobs[file_id]["message"] = str(e)
+
+        _threading.Thread(target=_start, daemon=True).start()
+
+        return {"success": True, "message": "Processing started", "file_id": file_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting processing for {file_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error starting processing: {str(e)}")
+
 @app.post("/api/files/upload-and-process")
 async def upload_and_process_file(file: UploadFile = File(...), session_id: str = ""):
     """Upload file as JSON and immediately process it with concurrent user support"""
