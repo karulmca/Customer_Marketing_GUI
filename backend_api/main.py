@@ -1015,210 +1015,11 @@ async def upload_file(
         )
         
     except HTTPException:
-        try:
-            result = auth_system.register_user(request.username, request.password, request.email)
-            if result['success']:
-                return {
-                    "success": True,
-                    "message": "User registered successfully"
-                }
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=result.get('message', 'Registration failed')
-                )
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Registration error: {str(e)}")
-        # Verify session
-        session = verify_session(session_id)
-        
-        if file_id not in processing_jobs:
-            # Try to reconstruct job from database if not in memory
-            print(f"🔍 File {file_id} not in memory, checking database...")
-            try:
-                from database_config.postgresql_config import PostgreSQLConfig
-                import psycopg2
-                
-                db_config = PostgreSQLConfig()
-                connection_params = db_config.get_connection_params()
-                connection = psycopg2.connect(**connection_params)
-                cursor = connection.cursor()
-                
-                # Find the file in database by checking if db_file_id matches our file_id
-                cursor.execute("SELECT file_name, file_path FROM file_upload WHERE id = %s", (file_id,))
-                result = cursor.fetchone()
-                
-                if result:
-                    # Reconstruct job from database info - create temp file from database content
-                    cursor.execute("SELECT raw_data FROM file_upload WHERE id = %s", (file_id,))
-                    raw_data_result = cursor.fetchone()
-                    
-                    if raw_data_result and raw_data_result[0]:
-                        import json
-                        import io
-                        
-                        # Reconstruct file content from database (NO temporary files)
-                        raw_data = raw_data_result[0]  # Already a dict/object, no need to parse
-                        if isinstance(raw_data, str):
-                            raw_data = json.loads(raw_data)  # Only parse if it's a string
-                        df_reconstructed = pd.DataFrame(raw_data['data'])
-                        
-                        # Convert DataFrame back to Excel content in memory
-                        excel_buffer = io.BytesIO()
-                        df_reconstructed.to_excel(excel_buffer, index=False)
-                        excel_content = excel_buffer.getvalue()
-                        excel_buffer.close()
-                        
-                        # Reconstruct job from database info (NO file paths)
-                        processing_jobs[file_id] = {
-                            "file_content": excel_content,  # Store content in memory
-                            "filename": result[0],
-                            "user_info": session['user_info'],
-                            "session_token": session['session_token'],
-                            "status": "uploaded",
-                            "progress": 0,
-                            "message": "File reconstructed from database",
-                            "db_file_id": file_id
-                        }
-                        print(f"✅ Reconstructed job for file: {result[0]}")
-                    else:
-                        cursor.close()
-                        connection.close()
-                        raise HTTPException(
-                            status_code=status.HTTP_404_NOT_FOUND,
-                            detail="File data not found in database"
-                        )
-                else:
-                    cursor.close()
-                    connection.close()
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail="File not found in database"
-                    )
-                    
-                cursor.close()
-                connection.close()
-                
-            except Exception as e:
-                import traceback
-                error_details = traceback.format_exc()
-                print(f"❌ Error reconstructing job: {str(e)}")
-                print(f"🔍 Full error details: {error_details}")
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"File reconstruction failed: {str(e)}"
-                )
-        
-        job = processing_jobs[file_id]
-        
-        if job["status"] == "processing":
-            return {"message": "File is already being processed"}
-        
-        # Update job status
-        job["status"] = "processing"
-        job["progress"] = 10
-        job["message"] = "Starting file processing..."
-        
-        # Update database status to processing
-        try:
-            file_processor = FileUploadProcessor()
-            file_processor.update_processing_status(file_id, 'processing')
-            print(f"✅ Database status updated to 'processing' for file: {file_id}")
-        except Exception as db_error:
-            print(f"❌ Failed to update database status to processing: {db_error}")
-        
-        # Start background processing
-        def background_process():
-            try:
-                print(f"🔄 Starting background processing for file: {job['filename']}")
-                
-                # Import the company processor with proper path
-                sys.path.insert(0, os.path.dirname(__file__))
-                from company_processor import CompanyDataProcessor
-                
-                print("✅ CompanyDataProcessor imported successfully")
-                
-                # Initialize processor
-                processor = CompanyDataProcessor()
-                print("✅ Processor initialized")
-                
-                # Progress callback to update job status
-                def update_progress(percent: int, message: str):
-                    job["progress"] = percent
-                    job["message"] = message
-                
-                # Process the file (using content from memory, NO file paths)
-                print(f"🔄 Starting file processing with scraping_enabled={scraping_enabled}")
-                result = processor.process_file(
-                    file_content=job.get("file_content"),  # Use content from memory
-                    filename=job["filename"],
-                    scraping_enabled=scraping_enabled,
-                    ai_analysis_enabled=ai_analysis_enabled,
-                    progress_callback=update_progress
-                )
-                print(f"✅ Processing completed with result: {result['success']}")
-                
-                if result["success"]:
-                    job["progress"] = 100
-                    job["status"] = "completed"
-                    job["message"] = result["summary"]
-                    job["result"] = result
-                    
-                    # Update database status
-                    try:
-                        file_processor = FileUploadProcessor()
-                        processed_count = result.get('processed_rows', 0)
-                        file_processor.sync_processing_completion(file_id, 'completed', processed_count)
-                        print(f"✅ Database status synced to 'completed' for file: {file_id} ({processed_count} records)")
-                    except Exception as db_error:
-                        print(f"❌ Failed to sync database status: {db_error}")
-                        
-                else:
-                    job["status"] = "failed"
-                    job["message"] = f"Processing failed: {result.get('error', 'Unknown error')}"
-                    job["progress"] = 0
-                    job["result"] = result
-                    
-                    # Update database status
-                    try:
-                        file_processor = FileUploadProcessor()
-                        error_msg = result.get('error', 'Unknown error')
-                        file_processor.sync_processing_completion(file_id, 'failed', 0, error_msg)
-                        print(f"✅ Database status synced to 'failed' for file: {file_id}")
-                    except Exception as db_error:
-                        print(f"❌ Failed to sync database status: {db_error}")
-                
-            except Exception as e:
-                print(f"❌ Background processing error: {str(e)}")
-                print(f"❌ Error type: {type(e)}")
-                import traceback
-                print(f"❌ Full traceback: {traceback.format_exc()}")
-                job["status"] = "failed"
-                job["message"] = f"Processing failed: {str(e)}"
-                job["progress"] = 0
-                
-                # Update database status for processing errors
-                try:
-                    file_processor = FileUploadProcessor()
-                    file_processor.sync_processing_completion(file_id, 'failed', 0, str(e))
-                    print(f"✅ Database status synced to 'failed' for file: {file_id}")
-                except Exception as db_error:
-                    print(f"❌ Failed to sync database status: {db_error}")
-        
-        # Start background thread
-        threading.Thread(target=background_process, daemon=True).start()
-        
-        return {"success": True, "message": "Processing started", "job_id": file_id}
-        
-    except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Processing error: {str(e)}"
-        )
+        logger.error(f"Upload failed for user {username if 'username' in locals() else 'unknown'}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+    
 
 @app.get("/api/files/status/{file_id}")
 async def get_processing_status(file_id: str, session_id: str):
@@ -1406,27 +1207,43 @@ async def download_processed_file_with_linkedin(file_id: str, session_id: str):
         wb.save(excel_buffer)
         excel_buffer.seek(0)
         
-        # Get original filename for the processed file name
-        file_query = f"SELECT original_filename FROM file_upload WHERE id = '{file_id}'"
-        file_result = db_connection.query_to_dataframe(file_query)
-        original_filename = "processed_data.xlsx"
-        if file_result is not None and not file_result.empty:
-            original_name = file_result.iloc[0]['original_filename']
-            if original_name and isinstance(original_name, str):
-                name_parts = original_name.rsplit('.', 1)
-                original_filename = f"processed_{name_parts[0]}.xlsx"
+        # Get original filename for the processed file name (file_upload.file_name)
+        try:
+            file_query = f"SELECT file_name FROM file_upload WHERE id = '{file_id}'"
+            file_result = db_connection.query_to_dataframe(file_query)
+            original_filename = "processed_data.xlsx"
+            if file_result is not None and not file_result.empty:
+                # prefer file_name column from file_upload
+                original_name = None
+                if 'file_name' in file_result.columns:
+                    original_name = file_result.iloc[0]['file_name']
+                elif 'original_filename' in file_result.columns:
+                    original_name = file_result.iloc[0]['original_filename']
+
+                if original_name and isinstance(original_name, str):
+                    name_parts = original_name.rsplit('.', 1)
+                    original_filename = f"processed_{name_parts[0]}.xlsx"
+                else:
+                    logger.warning(f"Original filename is None or invalid for file_id: {file_id}")
             else:
-                logger.warning(f"Original filename is None or invalid for file_id: {file_id}")
-        else:
-            logger.warning(f"No file upload record found for file_id: {file_id}")
-        
-        # Return Excel file
-        from fastapi.responses import Response
-        return Response(
-            content=excel_buffer.getvalue(),
+                logger.warning(f"No file upload record found for file_id: {file_id}")
+        except Exception as e:
+            logger.warning(f"Could not determine original filename for file_id {file_id}: {e}")
+
+        # Ensure buffer is at start and return a streaming response with correct headers
+        excel_buffer.seek(0)
+        from fastapi.responses import StreamingResponse
+        response = StreamingResponse(
+            content=excel_buffer,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f"attachment; filename={original_filename}"}
         )
+        # Use Content-Disposition with quoted filename
+        response.headers["Content-Disposition"] = f'attachment; filename="{original_filename}"'
+        try:
+            response.headers["Content-Length"] = str(len(excel_buffer.getvalue()))
+        except Exception:
+            pass
+        return response
         
     except HTTPException:
         raise
@@ -1820,7 +1637,8 @@ async def process_existing_file(file_id: str, session_id: str, scraping_enabled:
         conn_params = db_config.get_connection_params()
         conn = psycopg2.connect(**conn_params)
         cursor = conn.cursor()
-        cursor.execute("SELECT raw_data, filename FROM file_upload WHERE id = %s", (file_id,))
+        # Note: DB column is `file_name` (not `filename`) - select it as filename
+        cursor.execute("SELECT raw_data, file_name FROM file_upload WHERE id = %s", (file_id,))
         row = cursor.fetchone()
         cursor.close()
         conn.close()
@@ -1831,7 +1649,72 @@ async def process_existing_file(file_id: str, session_id: str, scraping_enabled:
         raw_data = row[0]
         filename = row[1] or 'uploaded_file.xlsx'
 
-        # Create in-memory job
+        # Normalize raw_data into bytes that CompanyDataProcessor expects
+        import io
+        import json
+        import base64
+
+        excel_bytes = None
+        try:
+            # If bytes were stored directly (preferred), use them
+            if isinstance(raw_data, (bytes, bytearray)):
+                excel_bytes = bytes(raw_data)
+
+            # If a dict was stored (e.g., {'columns':..., 'data': [...]}) reconstruct to Excel bytes
+            elif isinstance(raw_data, dict):
+                if 'data' in raw_data:
+                    df_reconstructed = pd.DataFrame(raw_data['data'])
+                else:
+                    # try to create DataFrame directly from dict
+                    df_reconstructed = pd.DataFrame(raw_data)
+                buf = io.BytesIO()
+                df_reconstructed.to_excel(buf, index=False)
+                excel_bytes = buf.getvalue()
+                buf.close()
+
+            # If a string was stored, it could be JSON or base64 or raw CSV/text
+            elif isinstance(raw_data, str):
+                # Try JSON first
+                try:
+                    parsed = json.loads(raw_data)
+                    if isinstance(parsed, dict) and 'data' in parsed:
+                        df_reconstructed = pd.DataFrame(parsed['data'])
+                        buf = io.BytesIO()
+                        df_reconstructed.to_excel(buf, index=False)
+                        excel_bytes = buf.getvalue()
+                        buf.close()
+                    else:
+                        # If parsed to something else, attempt to create DataFrame
+                        try:
+                            df_reconstructed = pd.DataFrame(parsed)
+                            buf = io.BytesIO()
+                            df_reconstructed.to_excel(buf, index=False)
+                            excel_bytes = buf.getvalue()
+                            buf.close()
+                        except Exception:
+                            # Fallback to base64 decode
+                            excel_bytes = base64.b64decode(raw_data)
+                except Exception:
+                    # Not JSON — try base64 decode
+                    try:
+                        excel_bytes = base64.b64decode(raw_data)
+                    except Exception:
+                        # As a last resort, treat string as raw bytes (e.g., CSV text)
+                        excel_bytes = raw_data.encode('utf-8')
+
+            else:
+                # Unknown type — attempt to coerce
+                try:
+                    excel_bytes = bytes(raw_data)
+                except Exception:
+                    excel_bytes = None
+        except Exception as _ex:
+            excel_bytes = None
+
+        if not excel_bytes:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to reconstruct uploaded file bytes from database raw_data")
+
+        # Create in-memory job with normalized bytes
         job_id = str(uuid.uuid4())
         processing_jobs[file_id] = {
             "id": job_id,
@@ -1840,9 +1723,34 @@ async def process_existing_file(file_id: str, session_id: str, scraping_enabled:
             "status": "processing",
             "progress": 0,
             "message": "Processing started",
-            "file_content": raw_data,
+            "file_content": excel_bytes,
             "result": None
         }
+
+        # Immediately update DB status to 'processing' so UI reflects the change
+        try:
+            from database_config.file_upload_processor import FileUploadProcessor
+            fup = FileUploadProcessor()
+            try:
+                fup.update_processing_status(file_id, 'processing')
+                print(f"✅ Database status updated to 'processing' for file: {file_id}")
+            except Exception as upd_err:
+                print(f"⚠️ Failed to update DB status to 'processing' for file {file_id}: {upd_err}")
+        except Exception as import_err:
+            print(f"⚠️ Could not import FileUploadProcessor to update DB status: {import_err}")
+
+        # Update per-user in-memory processing status (best-effort)
+        try:
+            username = session.get('user_info', {}).get('username') if session else None
+            if username:
+                user_processing_status[username] = {
+                    'status': 'processing',
+                    'file_id': file_id,
+                    'filename': filename,
+                    'started': datetime.now().isoformat()
+                }
+        except Exception:
+            pass
 
         # Start processing in background thread
         def _start():
@@ -1855,8 +1763,10 @@ async def process_existing_file(file_id: str, session_id: str, scraping_enabled:
                     processing_jobs[file_id]["progress"] = percent
                     processing_jobs[file_id]["message"] = message
 
+                # Use the normalized bytes stored in the job (ensures bytes-like object)
+                job_bytes = processing_jobs[file_id].get("file_content")
                 result = processor.process_file(
-                    file_content=raw_data,
+                    file_content=job_bytes,
                     filename=filename,
                     scraping_enabled=scraping_enabled,
                     ai_analysis_enabled=ai_analysis_enabled,
@@ -1867,6 +1777,20 @@ async def process_existing_file(file_id: str, session_id: str, scraping_enabled:
                 processing_jobs[file_id]["progress"] = 100
                 processing_jobs[file_id]["status"] = "completed" if result.get("success") else "failed"
                 processing_jobs[file_id]["message"] = result.get("summary", "Processing finished")
+
+                # Sync status to database using FileUploadProcessor helper
+                try:
+                    from database_config.file_upload_processor import FileUploadProcessor
+                    file_processor = FileUploadProcessor()
+                    processed_count = int(result.get('processed_rows', 0)) if result.get('processed_rows') is not None else 0
+                    if result.get('success'):
+                        file_processor.sync_processing_completion(file_id, 'completed', processed_count)
+                    else:
+                        err = result.get('error', None) or result.get('traceback', '')
+                        file_processor.sync_processing_completion(file_id, 'failed', 0, str(err))
+                except Exception as dbsync_err:
+                    # Log but don't raise — keep job status updated
+                    print(f"❌ Failed to sync processing completion to DB for file {file_id}: {dbsync_err}")
             except Exception as e:
                 processing_jobs[file_id]["status"] = "failed"
                 processing_jobs[file_id]["message"] = str(e)
