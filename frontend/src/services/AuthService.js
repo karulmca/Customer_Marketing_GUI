@@ -112,7 +112,8 @@ export const FileService = {
 
   async downloadProcessedFile(sessionId, fileId) {
     try {
-      const response = await api.get(`/files/download/${fileId}`, {
+      // Use the backend endpoint that generates the processed Excel from DB
+      const response = await api.get(`/files/download-processed/${fileId}`, {
         params: { session_id: sessionId },
         responseType: 'blob'
       });
@@ -140,6 +141,11 @@ export const FileService = {
     } catch (error) {
       throw new Error(error.response?.data?.detail || 'Download failed');
     }
+  },
+
+  // Backwards-compatible alias: some parts of the UI call downloadProcessed
+  async downloadProcessed(sessionId, fileId) {
+    return this.downloadProcessedFile(sessionId, fileId);
   },
 
   // New methods matching original GUI workflow
