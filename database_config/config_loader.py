@@ -72,6 +72,28 @@ class ConfigLoader:
     def get_scheduler_interval(self) -> int:
         """Get scheduler interval in minutes"""
         return self._config.get("scheduler_settings", {}).get("interval_minutes", 2)
+
+    def set_scheduler_interval(self, minutes: int) -> bool:
+        """Set scheduler interval (minutes) and persist to config file if writable."""
+        try:
+            minutes = int(minutes)
+            if minutes < 1:
+                raise ValueError("Interval must be >= 1 minute")
+            if "scheduler_settings" not in self._config:
+                self._config["scheduler_settings"] = {}
+            self._config["scheduler_settings"]["interval_minutes"] = minutes
+            # Try to persist back to the config file if possible
+            try:
+                with open(self.config_file, 'w', encoding='utf-8') as f:
+                    json.dump(self._config, f, indent=2)
+                    print(f"✅ Persisted scheduler interval ({minutes} min) to {self.config_file}")
+            except Exception:
+                # If we cannot write the config, still update the in-memory config
+                print(f"⚠️ Unable to persist config to {self.config_file}; using in-memory value only")
+            return True
+        except Exception as e:
+            print(f"❌ Failed to set scheduler interval: {e}")
+            return False
     
     def get_max_concurrent_jobs_per_user(self) -> int:
         """Get maximum concurrent jobs per user"""
@@ -134,6 +156,10 @@ config = ConfigLoader()
 def get_scheduler_interval() -> int:
     """Get scheduler interval in minutes"""
     return config.get_scheduler_interval()
+
+def set_scheduler_interval(minutes: int) -> bool:
+    """Set scheduler interval and persist it via the global config instance."""
+    return config.set_scheduler_interval(minutes)
 
 def get_max_concurrent_jobs_per_user() -> int:
     """Get maximum concurrent jobs per user"""

@@ -275,33 +275,27 @@ def _process_pending_uploads():
             return
 
         logger.info(f"📋 Found {len(pending_df)} eligible job(s) for processing")
-        success_count = 0
-        failure_count = 0
-        for _, row in pending_df.iterrows():
-            file_upload_id = row.get("id")
-            file_name = row.get("file_name")
-            try:
-                logger.info(f"🔄 Processing pending file: {file_name} (ID: {file_upload_id})")
-                ok = processor.process_uploaded_file(file_upload_id)
-                if ok:
-                    logger.info(f"✅ Processed: {file_name} (ID: {file_upload_id})")
-                    success_count += 1
-                else:
-                    logger.error(f"❌ Processing failed: {file_name} (ID: {file_upload_id})")
-                    failure_count += 1
-            except Exception as e:
-                logger.error(f"❌ Error processing ID {file_upload_id}: {e}")
-                failure_count += 1
-
-        total = success_count + failure_count
-        logger.info(f"📊 Scheduler batch done. Success: {success_count}, Failed: {failure_count}, Total: {total}")
-        scheduler_state["last_run"] = datetime.now().isoformat()
-        scheduler_state["last_result"] = {
-            "success": True,
-            "processed": total,
-            "successful": success_count,
-            "failed": failure_count,
-        }
+        # Prefer the consolidated automated runner which encapsulates the manual scrapers
+        try:
+            from backend_api.automated_job.run_automated_jobs import run_once as automated_run_once
+            # Limit the runner to the number of pending rows discovered
+            result = automated_run_once(limit=len(pending_df))
+            success_count = int(result.get('successful', 0))
+            failure_count = int(result.get('failed', 0))
+            total = int(result.get('processed', success_count + failure_count))
+            logger.info(f"📊 Scheduler batch done (automated runner). Success: {success_count}, Failed: {failure_count}, Total: {total}")
+            scheduler_state["last_run"] = datetime.now().isoformat()
+            scheduler_state["last_result"] = {
+                "success": True,
+                "processed": total,
+                "successful": success_count,
+                "failed": failure_count,
+            }
+        except Exception as e:
+            logger.error(f"❌ Automated runner failed: {e}")
+            scheduler_state["last_error"] = str(e)
+            scheduler_state["last_run"] = datetime.now().isoformat()
+            scheduler_state["last_result"] = {"success": False, "processed": 0, "error": str(e)}
     finally:
         setattr(_process_pending_uploads, "_busy", False)
         scheduler_state["running"] = False
@@ -1592,7 +1586,7 @@ async def upload_file_as_json(file: UploadFile = File(...), session_id: str = ""
                 
                 if file_upload_id:
                     logger.info(f"✅ File uploaded as JSON: {file.filename} by user {username} (ID: {file_upload_id})")
-                    return {
+                    response_payload = {
                         "success": True,
                         "file_upload_id": file_upload_id,
                         "message": f"File uploaded as JSON successfully (ID: {file_upload_id})",
@@ -1600,6 +1594,8 @@ async def upload_file_as_json(file: UploadFile = File(...), session_id: str = ""
                         "status": "pending_processing",
                         "uploaded_by": username
                     }
+                    # Ensure all values are JSON serializable (convert numpy types etc)
+                    return _clean_for_json_serialization(response_payload)
                 else:
                     raise HTTPException(status_code=500, detail="Failed to upload file as JSON")
                     
@@ -2363,6 +2359,56 @@ async def start_scheduler(session_id: str = "", mode: str = "cron", interval_min
         "message": f"Scheduler started ({schedule_desc})",
         "next_run": next_run,
     }
+
+
+@app.post("/api/jobs/scheduler/interval")
+async def set_scheduler_interval_endpoint(minutes: int, session_id: str = ""):
+    """Set the scheduler interval (minutes) and reschedule the job if it's running.
+
+    This will attempt to persist the new interval to the project's config.json. If persistence fails,
+    the in-memory config will be used for the running process until restart.
+    """
+    if session_id:
+        try:
+            verify_session(session_id)
+        except Exception:
+            pass
+
+    from database_config.config_loader import set_scheduler_interval, get_scheduler_interval
+
+    try:
+        minutes = int(minutes)
+        if minutes < 1:
+            raise HTTPException(status_code=400, detail="Interval must be >= 1 minute")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid minutes parameter")
+
+    ok = set_scheduler_interval(minutes)
+    if not ok:
+        # Still continue; config may be in-memory only
+        logger.warning("Scheduler interval set in-memory but failed to persist to config file")
+
+    # If the scheduler is running with a job, restart it with the new interval
+    with _scheduler_lock:
+        if scheduler and scheduler.running and scheduler.get_job(SCHEDULER_JOB_ID):
+            try:
+                # Remove existing job and restart with cron trigger using new interval
+                scheduler.remove_job(SCHEDULER_JOB_ID)
+                from apscheduler.triggers.cron import CronTrigger
+                trigger = CronTrigger(minute=f"*/{minutes}")
+                scheduler.add_job(
+                    _process_pending_uploads,
+                    trigger=trigger,
+                    id=SCHEDULER_JOB_ID,
+                    max_instances=1,
+                    coalesce=True,
+                    misfire_grace_time=300,
+                    replace_existing=True,
+                )
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to reschedule job: {e}")
+
+    return {"success": True, "minutes": minutes, "message": "Scheduler interval updated"}
 
 
 @app.post("/api/jobs/scheduler/stop")
