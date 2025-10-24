@@ -283,6 +283,43 @@ def _process_pending_uploads(use_advisory_lock: bool = True):
         scheduler_state["last_error"] = None
         logger.info("🚀 Scheduler job started: processing pending file uploads")
 
+        # Quick DB-level safety check: if there are any records left marked as 'processing',
+        # it's likely a previous run is still in progress or died mid-run. In that case skip
+        # starting a new processing batch to avoid conflicts and stuck states.
+        try:
+            processing_count = 0
+            # Prefer to reuse advisory_conn if available
+            if advisory_conn:
+                with advisory_conn.cursor() as _c:
+                    _c.execute("SELECT COUNT(*) FROM file_upload WHERE processing_status = 'processing'")
+                    processing_count = int(_c.fetchone()[0])
+            else:
+                # Open a short-lived connection to inspect DB state
+                try:
+                    from database_config.postgresql_config import PostgreSQLConfig
+                    import psycopg2
+                    db_conf = PostgreSQLConfig()
+                    params = db_conf.get_connection_params()
+                    with psycopg2.connect(**params) as _tmp_conn:
+                        with _tmp_conn.cursor() as _c:
+                            _c.execute("SELECT COUNT(*) FROM file_upload WHERE processing_status = 'processing'")
+                            processing_count = int(_c.fetchone()[0])
+                except Exception as _e:
+                    logger.warning(f"Could not check DB processing_count: {_e}")
+
+            if processing_count and processing_count > 0:
+                logger.info(f"🔁 Detected {processing_count} records already marked 'processing' in DB; skipping this automated run to avoid conflicts")
+                setattr(_process_pending_uploads, "_busy", False)
+                try:
+                    if advisory_conn:
+                        advisory_conn.close()
+                except Exception:
+                    pass
+                return
+        except Exception:
+            # Non-fatal: proceed with processing if safety check fails
+            pass
+
         # Use existing FileUploadProcessor from database_config
         processor = FileUploadProcessor()
 

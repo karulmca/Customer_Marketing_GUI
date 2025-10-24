@@ -66,20 +66,46 @@ class DatabaseConnection:
                 print("❌ Database not connected")
                 return False
             
-            # Insert DataFrame
-            rows_inserted = df.to_sql(
-                table_name, 
-                self.manager.engine, 
-                if_exists='append', 
-                index=False,
-                method='multi'
-            )
-            
-            print(f"✅ Inserted {len(df)} records into {table_name}")
-            return True
+            # Try fast pandas to_sql first
+            try:
+                df.to_sql(
+                    table_name,
+                    self.manager.engine,
+                    if_exists='append',
+                    index=False,
+                    method='multi'
+                )
+                print(f"✅ Inserted {len(df)} records into {table_name} using to_sql")
+                return True
+            except Exception as e_to_sql:
+                import traceback
+                print(f"⚠️ to_sql failed: {e_to_sql}")
+                print(traceback.format_exc())
+                # Fallback: use SQLAlchemy core insert in chunks
+                try:
+                    from sqlalchemy import Table, MetaData
+                    meta = MetaData()
+                    table = Table(table_name, meta, autoload_with=self.manager.engine)
+                    records = df.where(pd.notnull(df), None).to_dict(orient='records')
+                    chunk_size = 500
+                    inserted = 0
+                    with self.manager.engine.begin() as conn:
+                        for i in range(0, len(records), chunk_size):
+                            chunk = records[i:i+chunk_size]
+                            conn.execute(table.insert(), chunk)
+                            inserted += len(chunk)
+                    print(f"✅ Inserted {inserted} records into {table_name} using SQLAlchemy core fallback")
+                    return True
+                except Exception as e_core:
+                    import traceback
+                    print(f"❌ Core insert fallback failed: {e_core}")
+                    print(traceback.format_exc())
+                    return False
             
         except Exception as e:
-            print(f"❌ Failed to insert DataFrame: {str(e)}")
+            import traceback
+            print(f"❌ Failed to insert DataFrame (unexpected): {str(e)}")
+            print(traceback.format_exc())
             return False
     
     def query_to_dataframe(self, query: str) -> Optional[pd.DataFrame]:

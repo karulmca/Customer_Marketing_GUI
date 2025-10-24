@@ -135,6 +135,16 @@ class CompanyDataProcessor:
                     website_column=website_col, 
                     company_name_column=company_name_col
                 )
+                # Ensure columns are object dtype to avoid pandas FutureWarnings
+                try:
+                    processed_df = processed_df.astype(object)
+                except Exception:
+                    # Fallback: coerce key text columns to string/object
+                    for c in processed_df.columns:
+                        try:
+                            processed_df[c] = processed_df[c].astype(object)
+                        except Exception:
+                            processed_df[c] = processed_df[c].astype(str)
                 
                 # Track progress through the dataframe processing
                 for index, row in processed_df.iterrows():
@@ -204,19 +214,34 @@ class CompanyDataProcessor:
                     db_df['created_by'] = 'CompanyDataProcessor'
                     db_df['updated_at'] = pd.Timestamp.now()
 
-                    # Fetch file_upload_id from file_upload table using filename
+                    # Fetch file_upload_id from file_upload table using filename (with retries)
                     file_upload_id = None
-                    try:
+                    def _fetch_file_upload_id():
                         from sqlalchemy import text
                         query = text("SELECT id FROM file_upload WHERE file_name = :filename ORDER BY upload_date DESC LIMIT 1")
                         with self.db_connection.manager.engine.connect() as conn:
                             result = conn.execute(query, {"filename": filename})
-                            row = result.fetchone()
+                            return result.fetchone()
+
+                    # Retry loop for transient DB errors (e.g., SSL connection closed)
+                    fetch_attempts = 3
+                    for attempt in range(fetch_attempts):
+                        try:
+                            row = _fetch_file_upload_id()
                             if row:
                                 file_upload_id = row[0]
-                    except Exception as e:
-                        logger.error(f"Failed to fetch file_upload_id for filename '{filename}': {e}")
-                        file_upload_id = None
+                            break
+                        except Exception as e:
+                            logger.warning(f"Attempt {attempt+1}/{fetch_attempts} - failed to fetch file_upload_id for '{filename}': {e}")
+                            # Try to reconnect the DB manager/engine
+                            try:
+                                if self.db_connection:
+                                    self.db_connection.connect()
+                                    logger.info("Reinitialized DB connection after failure")
+                            except Exception as _re:
+                                logger.warning(f"DB reconnect attempt failed: {_re}")
+                            time.sleep(2 * (attempt + 1))
+
                     # ...existing code for column mapping and filtering...
                     # Ensure file_upload_id is set for all rows just before insert
                     if not file_upload_id:
@@ -351,7 +376,25 @@ class CompanyDataProcessor:
                     
                     # Insert data into company_data table only if file_upload_id is present
                     if file_upload_id:
-                        saved_to_db = self.db_connection.insert_dataframe(db_df, "company_data")
+                        # Insert with retries for transient DB errors
+                        saved_to_db = False
+                        insert_attempts = 3
+                        for attempt in range(insert_attempts):
+                            try:
+                                saved_to_db = self.db_connection.insert_dataframe(db_df, "company_data")
+                                if saved_to_db:
+                                    break
+                            except Exception as ie:
+                                import traceback
+                                tb = traceback.format_exc()
+                                logger.warning(f"Attempt {attempt+1}/{insert_attempts} - insert failed: {ie}\n{tb}")
+                                db_save_error = str(ie)
+                                try:
+                                    if self.db_connection:
+                                        self.db_connection.connect()
+                                except Exception as _re:
+                                    logger.warning(f"DB reconnect attempt failed during insert: {_re}")
+                                time.sleep(2 * (attempt + 1))
                     else:
                         saved_to_db = False
                     
