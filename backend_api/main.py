@@ -187,10 +187,9 @@ async def debug_pending_uploads():
         all_uploads_query = """
         SELECT id, file_name, processing_status, upload_date, uploaded_by 
         FROM file_upload 
-        ORDER BY upload_date DESC 
-        LIMIT 10
+        ORDER BY upload_date DESC
         """
-        
+
         from database_config.postgresql_config import PostgreSQLConfig
         db_config = PostgreSQLConfig()
         all_uploads = db_config.query_to_dataframe(all_uploads_query)
@@ -238,13 +237,47 @@ def _ensure_scheduler():
         scheduler._started_once = True
     return scheduler
 
-def _process_pending_uploads():
+def _process_pending_uploads(use_advisory_lock: bool = True):
     """Job: process pending uploads in file_upload table (no overlap)."""
     # Prevent overlapping runs at the function level as well
     if getattr(_process_pending_uploads, "_busy", False):
         logger.info("⏳ Skipping run; previous job still in progress")
         return
     setattr(_process_pending_uploads, "_busy", True)
+    advisory_conn = None
+    advisory_acquired = False
+    ADVISORY_LOCK_ID = 4242424242  # arbitrary 64-bit integer lock id
+
+    if use_advisory_lock:
+        # Try to acquire a cross-process advisory lock in Postgres so multiple
+        # application instances won't run the job concurrently. If acquiring
+        # the lock fails due to DB errors, we proceed but rely on the in-process
+        # _busy flag to prevent overlap within this process.
+        try:
+            from database_config.postgresql_config import PostgreSQLConfig
+            import psycopg2
+
+            db_conf = PostgreSQLConfig()
+            params = db_conf.get_connection_params()
+            advisory_conn = psycopg2.connect(**params)
+            advisory_conn.autocommit = True
+            with advisory_conn.cursor() as cur:
+                cur.execute("SELECT pg_try_advisory_lock(%s);", (ADVISORY_LOCK_ID,))
+                res = cur.fetchone()
+                advisory_acquired = bool(res[0]) if res else False
+
+            if not advisory_acquired:
+                logger.info("🔒 Advisory lock held by another process; skipping this run")
+                setattr(_process_pending_uploads, "_busy", False)
+                try:
+                    if advisory_conn:
+                        advisory_conn.close()
+                except Exception:
+                    pass
+                return
+        except Exception as _lock_err:
+            # If advisory lock cannot be used (DB down or not reachable), log and continue
+            logger.warning(f"⚠️ Could not acquire advisory lock (will continue locally): {_lock_err}")
     try:
         scheduler_state["running"] = True
         scheduler_state["last_error"] = None
@@ -297,6 +330,15 @@ def _process_pending_uploads():
             scheduler_state["last_run"] = datetime.now().isoformat()
             scheduler_state["last_result"] = {"success": False, "processed": 0, "error": str(e)}
     finally:
+        # Release advisory lock if held
+        try:
+            if advisory_acquired and advisory_conn:
+                with advisory_conn.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_unlock(%s);", (ADVISORY_LOCK_ID,))
+                advisory_conn.close()
+        except Exception as _unlock_err:
+            logger.warning(f"⚠️ Failed to release advisory lock: {_unlock_err}")
+
         setattr(_process_pending_uploads, "_busy", False)
         scheduler_state["running"] = False
 
@@ -1339,8 +1381,7 @@ async def list_uploaded_files(session_id: str):
             SELECT id, file_name, upload_date, uploaded_by, processing_status, 
                    records_count, file_size, processing_error
             FROM file_upload 
-            ORDER BY upload_date DESC 
-            LIMIT 50
+            ORDER BY upload_date DESC
         """)
         
         files = cursor.fetchall()
@@ -1949,8 +1990,7 @@ async def get_uploaded_files(session_id: str):
                 FROM file_upload fu
                 LEFT JOIN company_data cd ON fu.id = cd.file_upload_id
                 GROUP BY fu.id, fu.file_name, fu.upload_date, fu.uploaded_by, fu.processing_status, fu.records_count
-                ORDER BY fu.upload_date DESC 
-                LIMIT 10
+                ORDER BY fu.upload_date DESC
                 """
             )
 
@@ -2303,6 +2343,10 @@ async def run_process_pending_now(session_id: str = ""):
             # proceed even if session invalid; comment to enforce
             pass
 
+    # Prevent overlapping runs: check if processor is busy
+    if getattr(_process_pending_uploads, "_busy", False):
+        return {"success": False, "message": "Processing already in progress; skipping new start."}
+
     # Fire-and-forget thread to run the job once
     _threading.Thread(target=_process_pending_uploads, daemon=True).start()
     return {"success": True, "message": "Pending uploads processing started"}
@@ -2346,7 +2390,7 @@ async def start_scheduler(session_id: str = "", mode: str = "cron", interval_min
             trigger=trigger,
             id=SCHEDULER_JOB_ID,
             max_instances=1,
-            coalesce=True,
+            coalesce=False,
             misfire_grace_time=300,
             replace_existing=True,
         )
@@ -2566,7 +2610,9 @@ async def startup_event():
                         IntervalTrigger(minutes=interval_minutes),
                         id=SCHEDULER_JOB_ID,
                         replace_existing=True,
-                        max_instances=1
+                        max_instances=1,
+                        coalesce=False,
+                        misfire_grace_time=300,
                     )
                     
                     scheduler_state["running"] = True
