@@ -1450,6 +1450,86 @@ async def list_uploaded_files(session_id: str):
             detail=f"Error retrieving files: {str(e)}"
         )
 
+@app.put("/api/files/{file_id}/status")
+async def update_file_status(file_id: str, session_id: str, status_data: dict):
+    """Update the processing status of a file upload"""
+    try:
+        # Verify session
+        verify_session(session_id)
+        
+        # Validate status
+        new_status = status_data.get("status")
+        valid_statuses = ['pending', 'processing', 'completed', 'failed', 'cancelled']
+        
+        if not new_status:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Status field is required"
+            )
+        
+        if new_status not in valid_statuses:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid status. Must be one of: {', '.join(valid_statuses)}"
+            )
+        
+        # Get database connection
+        from database_config.postgresql_config import PostgreSQLConfig
+        import psycopg2
+        from datetime import datetime
+        
+        db_config = PostgreSQLConfig()
+        connection_params = db_config.get_connection_params()
+        connection = psycopg2.connect(**connection_params)
+        
+        cursor = connection.cursor()
+        
+        # Check if file exists
+        cursor.execute("SELECT id, processing_status FROM file_upload WHERE id = %s", (file_id,))
+        file_record = cursor.fetchone()
+        
+        if not file_record:
+            cursor.close()
+            connection.close()
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="File not found"
+            )
+        
+        old_status = file_record[1]
+        
+        # Update the status
+        cursor.execute("""
+            UPDATE file_upload 
+            SET processing_status = %s,
+                updated_at = %s
+            WHERE id = %s
+        """, (new_status, datetime.now(), file_id))
+        
+        connection.commit()
+        cursor.close()
+        connection.close()
+        
+        logger.info(f"File {file_id} status updated from {old_status} to {new_status}")
+        
+        return {
+            "success": True,
+            "message": "File status updated successfully",
+            "file_id": file_id,
+            "old_status": old_status,
+            "new_status": new_status,
+            "updated_at": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating file status: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error updating file status: {str(e)}"
+        )
+
 @app.get("/api/debug/jobs")
 async def debug_jobs(session_id: str):
     """Debug endpoint to check processing jobs"""

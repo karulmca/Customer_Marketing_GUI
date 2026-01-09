@@ -66,10 +66,12 @@ import {
   Replay as RetryIcon,
   DataUsage as DataIcon,
   Home as HomeIcon,
-  TableChart as TableIcon
+  TableChart as TableIcon,
+  Settings as SettingsIcon
 } from '@mui/icons-material';
 import { useDropzone } from 'react-dropzone';
 import { FileService, DatabaseService } from '../services/AuthService';
+import FileStatusManager from './FileStatusManager';
 
 // Custom TabPanel component for tab content
 function CustomTabPanel(props) {
@@ -1276,6 +1278,12 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
               {...a11yProps(1)}
               sx={{ minHeight: 64 }}
             />
+            <Tab 
+              icon={<SettingsIcon />} 
+              label="File Status Manager" 
+              {...a11yProps(2)}
+              sx={{ minHeight: 64 }}
+            />
           </Tabs>
         </Box>
 
@@ -1984,6 +1992,11 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
               </Card>
             </Grid>
           </Grid>
+        </CustomTabPanel>
+
+        {/* Tab 3: File Status Manager */}
+        <CustomTabPanel value={activeTab} index={2}>
+          <FileStatusManager sessionId={sessionId} token={sessionId} />
         </CustomTabPanel>
 
       </Box>

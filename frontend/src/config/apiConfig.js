@@ -4,8 +4,8 @@
  */
 
 // Base API URL - configured via environment variables
-//const API_BASE_URL = 'http://localhost:8000/api';
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://company-scraper-backend-90mt.onrender.com/api';
+//const API_BASE_URL = 'https://company-scraper-backend-90mt.onrender.com/api';
 
 export { API_BASE_URL };
 
@@ -19,6 +19,8 @@ export const API_ENDPOINTS = {
     editRecord: (recordId, sessionId) => `${API_BASE_URL}/files/edit-data/${recordId}?session_id=${sessionId}`,
     deleteRecord: (recordId, sessionId) => `${API_BASE_URL}/files/delete-record/${recordId}?session_id=${sessionId}`,
     reprocess: (fileId, sessionId) => `${API_BASE_URL}/files/process/${fileId}?session_id=${sessionId}`,
+    list: (sessionId) => `${API_BASE_URL}/files/list?session_id=${sessionId}`,
+    updateStatus: (fileId, sessionId) => `${API_BASE_URL}/files/${fileId}/status?session_id=${sessionId}`,
   },
   
   // Template endpoints
