@@ -13,6 +13,9 @@ import { SnackbarProvider } from 'notistack';
 
 import LoginForm from './components/LoginForm';
 import FileUploadDashboard from './components/FileUploadDashboard';
+import PrivacyPolicy from './components/PrivacyPolicy';
+import TermsOfService from './components/TermsOfService';
+import ContactUs from './components/ContactUs';
 import { AuthService } from './services/AuthService';
 
 // Material-UI theme
@@ -168,6 +171,9 @@ function App() {
                   )
                 } 
               />
+              <Route path="/privacy-policy" element={<PrivacyPolicy />} />
+              <Route path="/terms-of-service" element={<TermsOfService />} />
+              <Route path="/contact-us" element={<ContactUs />} />
               <Route 
                 path="/" 
                 element={
