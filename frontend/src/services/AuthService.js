@@ -203,6 +203,21 @@ export const FileService = {
     } catch (error) {
       throw new Error(error.response?.data?.detail || 'Failed to delete file');
     }
+  },
+
+  async downloadMultipleFiles(sessionId, fileIds) {
+    try {
+      const response = await api.post('/files/download-multiple', 
+        { file_ids: fileIds },
+        {
+          params: { session_id: sessionId },
+          responseType: 'blob'
+        }
+      );
+      return response.data;
+    } catch (error) {
+      throw new Error(error.response?.data?.detail || 'Failed to download multiple files');
+    }
   }
 };
 
