@@ -14,9 +14,11 @@ RUN apt-get update && apt-get install -y \
 # Copy the entire project (since backend needs parent directories)
 COPY . .
 
-# Install Python dependencies from backend requirements
-RUN pip install --no-cache-dir --upgrade pip
-RUN pip install --no-cache-dir -r backend_api/requirements.txt
+# Install Python dependencies from backend requirements with retry logic
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir --timeout=1000 --retries=5 -r backend_api/requirements.txt || \
+    (sleep 5 && pip install --no-cache-dir --timeout=1000 --retries=5 -r backend_api/requirements.txt) || \
+    (sleep 10 && pip install --no-cache-dir --timeout=1000 --retries=5 -r backend_api/requirements.txt)
 
 # Set working directory to backend_api
 WORKDIR /app
