@@ -75,7 +75,8 @@ class CompanyDataProcessor:
         return scrapers_loaded
     
     def process_file(self, file_content: bytes = None, file_path: str = None, filename: str = "uploaded_file.xlsx",
-                    scraping_enabled: bool = True, ai_analysis_enabled: bool = False, progress_callback=None) -> Dict[str, Any]:
+                    scraping_enabled: bool = True, ai_analysis_enabled: bool = False, progress_callback=None,
+                    file_upload_id: int = None) -> Dict[str, Any]:
         """
         Process an Excel file with company data (NO local storage required)
         
@@ -86,6 +87,7 @@ class CompanyDataProcessor:
             scraping_enabled: Whether to enable web scraping
             ai_analysis_enabled: Whether to enable AI analysis
             progress_callback: Function to call with progress updates
+            file_upload_id: Database ID for progress tracking
             
         Returns:
             Dictionary with processing results
@@ -133,7 +135,8 @@ class CompanyDataProcessor:
                     df,
                     linkedin_column=linkedin_col,
                     website_column=website_col, 
-                    company_name_column=company_name_col
+                    company_name_column=company_name_col,
+                    file_upload_id=file_upload_id
                 )
                 # Ensure columns are object dtype to avoid pandas FutureWarnings
                 try:

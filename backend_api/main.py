@@ -2310,7 +2310,8 @@ async def process_existing_file(file_id: str, session_id: str, scraping_enabled:
                     filename=filename,
                     scraping_enabled=scraping_enabled,
                     ai_analysis_enabled=ai_analysis_enabled,
-                    progress_callback=update_progress
+                    progress_callback=update_progress,
+                    file_upload_id=file_id
                 )
 
                 processing_jobs[file_id]["result"] = result

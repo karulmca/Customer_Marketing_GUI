@@ -716,7 +716,9 @@ class CompleteCompanyScraper:
                 # Update progress in database if file_upload_id provided
                 if file_upload_id:
                     try:
+                        logger.info(f"📊 Attempting to update progress for file_id: {file_upload_id}")
                         from backend_api.main import _update_file_progress
+                        logger.info(f"✅ Successfully imported _update_file_progress function")
                         _update_file_progress(
                             file_upload_id=file_upload_id,
                             total=total_companies,
@@ -725,8 +727,13 @@ class CompleteCompanyScraper:
                             success=success_count,
                             errors=error_count
                         )
+                        logger.info(f"✅ Progress update completed successfully")
                     except Exception as prog_err:
-                        logger.error(f"Failed to update progress: {prog_err}")
+                        logger.error(f"❌ Failed to update progress: {prog_err}")
+                        import traceback
+                        logger.error(f"Traceback: {traceback.format_exc()}")
+                else:
+                    logger.warning(f"⚠️ No file_upload_id provided, skipping progress update")
         
         logger.info("Processing completed")
         return df

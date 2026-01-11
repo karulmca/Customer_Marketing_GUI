@@ -13,18 +13,18 @@ database_config_path = os.path.join(current_dir, 'database_config')
 if database_config_path not in sys.path:
     sys.path.insert(0, database_config_path)
 
-from database_config.db_utils import get_database_connection
+from database_config.postgresql_config import PostgreSQLConfig
+import psycopg2
 
 def add_progress_fields():
     """Add progress tracking fields to file_upload table"""
     
-    db_connection = get_database_connection("postgresql")
-    if not db_connection:
-        print("❌ Failed to connect to database")
-        return False
+    config = PostgreSQLConfig()
     
     try:
-        conn = db_connection.connect()
+        # Get connection parameters and connect
+        params = config.get_connection_params()
+        conn = psycopg2.connect(**params)
         cursor = conn.cursor()
         
         print("🔄 Adding progress tracking fields to file_upload table...")

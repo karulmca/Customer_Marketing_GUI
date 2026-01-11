@@ -232,11 +232,15 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
         await loadUploadedFiles();
         await loadLastProcessedFile();
         
-        // Check if job status changed (could indicate scheduler ran)
+        // Check if job status changed and check for processing files
         const response = await FileService.getUploadedFiles(sessionId);
-        const currentFiles = response.files || [];
+        const files = response.files || [];
+        
+        console.log(`📁 Loaded ${files.length} files, checking for processing status...`);
+        
+        // Check if job status changed (could indicate scheduler ran)
         const statusChanged = previousFiles.some((prevFile, index) => {
-          const currentFile = currentFiles.find(f => f.id === prevFile.id);
+          const currentFile = files.find(f => f.id === prevFile.id);
           return currentFile && currentFile.processing_status !== prevFile.processing_status;
         });
         
@@ -245,41 +249,45 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
           setLastJobCheck(Date.now());
         }
         
-        // Check processing status for active files
-        if (processingFiles.size > 0) {
-          const response = await FileService.getUploadedFiles(sessionId);
-          const files = response.files || [];
-          
-          // Check if any files finished processing
-          const stillProcessing = new Set();
-          let hasCompletedFiles = false;
-          
-          processingFiles.forEach(fileId => {
-            const file = files.find(f => f.id === fileId);
-            if (file) {
-              if (file.processing_status === 'processing' || file.processing_status === 'pending') {
-                stillProcessing.add(fileId);
-              } else if (file.processing_status === 'completed' || file.processing_status === 'failed') {
-                hasCompletedFiles = true;
-                if (file.processing_status === 'completed') {
-                  setSuccess(`File "${file.file_name}" processed successfully!`);
-                } else if (file.processing_status === 'failed') {
-                  setError(`File "${file.file_name}" processing failed: ${file.processing_error || 'Unknown error'}`);
-                }
-              }
-            } else {
-              // File not found in the list, remove from processing
+        // Check processing status for all files
+        const stillProcessing = new Set();
+        let hasCompletedFiles = false;
+        
+        // First, check existing processing files
+        processingFiles.forEach(fileId => {
+          const file = files.find(f => f.id === fileId);
+          if (file) {
+            if (file.processing_status === 'processing' || file.processing_status === 'pending') {
+              stillProcessing.add(fileId);
+            } else if (file.processing_status === 'completed' || file.processing_status === 'failed') {
               hasCompletedFiles = true;
+              if (file.processing_status === 'completed') {
+                setSuccess(`File "${file.file_name}" processed successfully!`);
+              } else if (file.processing_status === 'failed') {
+                setError(`File "${file.file_name}" processing failed: ${file.processing_error || 'Unknown error'}`);
+              }
             }
-          });
-          
-          // Update processing files set
-          setProcessingFiles(stillProcessing);
-          
-          // If we have completed files, clear processing status
-          if (hasCompletedFiles && stillProcessing.size === 0) {
-            setProcessingStatus(null);
+          } else {
+            // File not found in the list, remove from processing
+            hasCompletedFiles = true;
           }
+        });
+        
+        // Also scan all files and add any with "processing" status that aren't already tracked
+        files.forEach(file => {
+          if ((file.processing_status === 'processing' || file.processing_status === 'pending') && !stillProcessing.has(file.id)) {
+            console.log(`🔍 Found processing file not in Set: ${file.file_name} (ID: ${file.id})`);
+            stillProcessing.add(file.id);
+          }
+        });
+        
+        // Update processing files set
+        console.log(`📊 Processing files Set updated: ${stillProcessing.size} files`, Array.from(stillProcessing));
+        setProcessingFiles(stillProcessing);
+        
+        // If we have completed files, clear processing status
+        if (hasCompletedFiles && stillProcessing.size === 0) {
+          setProcessingStatus(null);
         }
         
         } catch (error) {
@@ -295,28 +303,36 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
   // Real-time progress polling for processing files
   useEffect(() => {
     const pollingInterval = setInterval(async () => {
-      if (processingFiles.size === 0) return;
+      if (processingFiles.size === 0) {
+        console.log('⏸️ No files processing, skipping progress poll');
+        return;
+      }
+
+      console.log(`🔄 Polling progress for ${processingFiles.size} files:`, Array.from(processingFiles));
 
       try {
         // Poll progress for all processing files
         const progressPromises = Array.from(processingFiles).map(async (fileId) => {
           try {
-            const response = await fetch(
-              `${API_ENDPOINTS.BASE_URL}/api/files/progress/${fileId}?session_id=${sessionId}`,
-              {
-                method: 'GET',
-                headers: {
-                  'Content-Type': 'application/json',
-                }
+            const url = `${API_ENDPOINTS.BASE_URL}/api/files/progress/${fileId}?session_id=${sessionId}`;
+            console.log(`📡 Fetching progress from: ${url}`);
+            
+            const response = await fetch(url, {
+              method: 'GET',
+              headers: {
+                'Content-Type': 'application/json',
               }
-            );
+            });
 
             if (response.ok) {
               const data = await response.json();
+              console.log(`✅ Progress data for file ${fileId}:`, data);
               return { fileId, progress: data };
+            } else {
+              console.warn(`⚠️ Progress fetch failed for file ${fileId}: ${response.status}`);
             }
           } catch (err) {
-            console.error(`Error polling progress for file ${fileId}:`, err);
+            console.error(`❌ Error polling progress for file ${fileId}:`, err);
           }
           return null;
         });
@@ -330,10 +346,11 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
             newProgress[result.fileId] = result.progress;
           }
         });
+        console.log('📊 Updated progress state:', newProgress);
         setFileProgress(newProgress);
 
       } catch (error) {
-        console.error('Progress polling error:', error);
+        console.error('❌ Progress polling error:', error);
       }
     }, 2000); // Poll every 2 seconds
 
@@ -2148,25 +2165,36 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
                                   />
                                   
                                   {/* Real-time Progress Bar */}
-                                  {(processingFiles.has(file.id) || file.processing_status === 'processing') && fileProgress[file.id] && (
+                                  {(processingFiles.has(file.id) || file.processing_status === 'processing') && (
                                     <Box sx={{ width: '100%', mt: 1 }}>
-                                      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                                        <Typography variant="caption" color="text.secondary">
-                                          {fileProgress[file.id].progress_percentage?.toFixed(1) || 0}%
-                                        </Typography>
-                                        <Typography variant="caption" color="text.secondary">
-                                          {fileProgress[file.id].processed_records || 0}/{fileProgress[file.id].total_records || 0}
-                                        </Typography>
-                                      </Box>
-                                      <LinearProgress 
-                                        variant="determinate" 
-                                        value={fileProgress[file.id].progress_percentage || 0}
-                                        sx={{ height: 8, borderRadius: 1 }}
-                                      />
-                                      {fileProgress[file.id].current_status_message && (
-                                        <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem', mt: 0.5, display: 'block' }}>
-                                          {fileProgress[file.id].current_status_message}
-                                        </Typography>
+                                      {fileProgress[file.id] ? (
+                                        <>
+                                          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                                            <Typography variant="caption" color="text.secondary">
+                                              {fileProgress[file.id].progress_percentage?.toFixed(1) || 0}%
+                                            </Typography>
+                                            <Typography variant="caption" color="text.secondary">
+                                              {fileProgress[file.id].processed_records || 0}/{fileProgress[file.id].total_records || 0}
+                                            </Typography>
+                                          </Box>
+                                          <LinearProgress 
+                                            variant="determinate" 
+                                            value={fileProgress[file.id].progress_percentage || 0}
+                                            sx={{ height: 8, borderRadius: 1 }}
+                                          />
+                                          {fileProgress[file.id].current_status_message && (
+                                            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem', mt: 0.5, display: 'block' }}>
+                                              {fileProgress[file.id].current_status_message}
+                                            </Typography>
+                                          )}
+                                        </>
+                                      ) : (
+                                        <Box>
+                                          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
+                                            ⏳ Initializing progress tracking... (File ID: {file.id}, In Set: {processingFiles.has(file.id) ? 'Yes' : 'No'})
+                                          </Typography>
+                                          <LinearProgress sx={{ height: 4, borderRadius: 1, mt: 0.5 }} />
+                                        </Box>
                                       )}
                                     </Box>
                                   )}

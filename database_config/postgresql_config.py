@@ -207,6 +207,33 @@ class PostgreSQLConfig:
         
         return self.Session() if self.Session else None
     
+    def execute_query(self, query: str, params: tuple = None):
+        """Execute a query with parameters using psycopg2"""
+        conn = None
+        cursor = None
+        try:
+            connection_params = self.get_connection_params()
+            conn = psycopg2.connect(**connection_params)
+            cursor = conn.cursor()
+            
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
+            
+            conn.commit()
+            
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            logger.error(f"❌ Query execution failed: {e}")
+            raise
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
+    
     def close_connections(self):
         """Close all connections and cleanup"""
         if self.connection_pool:
