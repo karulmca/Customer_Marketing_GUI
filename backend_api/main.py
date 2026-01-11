@@ -454,6 +454,9 @@ class UploadedFilesResponse(BaseModel):
     files: List[UploadedFile]
     count: int
 
+class DownloadMultipleRequest(BaseModel):
+    file_ids: List[str]
+
 # Authentication endpoints
 @app.post("/api/auth/login")
 async def login(request: LoginRequest, req: Request):
@@ -1327,6 +1330,187 @@ async def download_processed_file_with_linkedin(file_id: str, session_id: str):
             detail=f"Download error: {str(e)}"
         )
 
+@app.post("/api/files/download-multiple")
+async def download_multiple_files(request: DownloadMultipleRequest, session_id: str):
+    """Download multiple processed files merged into a single Excel file"""
+    try:
+        # Verify session
+        verify_session(session_id)
+        
+        file_ids = request.file_ids
+        
+        if not file_ids or len(file_ids) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No file IDs provided"
+            )
+        
+        # Get database connection
+        db_connection = get_database_connection("postgresql")
+        if not db_connection:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database connection failed"
+            )
+        
+        if not db_connection.connect():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Failed to connect to database"
+            )
+        
+        # Merge all files into a single Excel file
+        from io import BytesIO
+        import openpyxl
+        from openpyxl.utils.dataframe import dataframe_to_rows
+        from openpyxl.styles import Font, PatternFill, Alignment
+        import pandas as pd
+        
+        # Create a single workbook
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)  # Remove the default sheet
+        
+        all_data = []  # Store all data for combined sheet
+        file_count = 0
+        
+        for file_id in file_ids:
+            try:
+                # Query processed company data for this file
+                query = f"""
+                SELECT 
+                    company_name as "Company Name",
+                    linkedin_url as "LinkedIn_URL",
+                    company_website as "Website_URL", 
+                    company_size as "Company_Size",
+                    industry as "Industry",
+                    revenue as "Revenue"
+                FROM company_data 
+                WHERE file_upload_id = '{file_id}' 
+                AND processing_status = 'completed'
+                ORDER BY company_name
+                """
+                
+                result_df = db_connection.query_to_dataframe(query)
+                
+                if result_df is None or result_df.empty:
+                    logger.warning(f"No processed data found for file_id: {file_id}")
+                    continue
+                
+                # Get original filename for sheet name
+                file_query = f"SELECT file_name FROM file_upload WHERE id = '{file_id}'"
+                file_result = db_connection.query_to_dataframe(file_query)
+                
+                sheet_name = f"File_{file_count + 1}"
+                if file_result is not None and not file_result.empty and 'file_name' in file_result.columns:
+                    original_name = file_result.iloc[0]['file_name']
+                    if original_name and isinstance(original_name, str):
+                        # Clean filename for sheet name (max 31 chars, no special chars)
+                        sheet_name = original_name.rsplit('.', 1)[0][:31]
+                        sheet_name = ''.join(c for c in sheet_name if c.isalnum() or c in (' ', '_', '-'))
+                
+                # Create a sheet for this file
+                ws = wb.create_sheet(title=sheet_name)
+                
+                # Add data to worksheet
+                for r in dataframe_to_rows(result_df, index=False, header=True):
+                    ws.append(r)
+                
+                # Style the header row
+                header_font = Font(bold=True, color="FFFFFF")
+                header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+                header_alignment = Alignment(horizontal="center", vertical="center")
+                
+                for cell in ws[1]:
+                    cell.font = header_font
+                    cell.fill = header_fill
+                    cell.alignment = header_alignment
+                
+                # Auto-adjust column widths
+                for column in ws.columns:
+                    max_length = 0
+                    column_letter = column[0].column_letter
+                    for cell in column:
+                        try:
+                            if len(str(cell.value)) > max_length:
+                                max_length = len(str(cell.value))
+                        except:
+                            pass
+                    adjusted_width = min(max_length + 2, 50)
+                    ws.column_dimensions[column_letter].width = adjusted_width
+                
+                # Add to combined data
+                all_data.append(result_df)
+                file_count += 1
+                
+            except Exception as file_error:
+                logger.error(f"Error processing file {file_id}: {str(file_error)}")
+                continue
+        
+        # Check if any files were processed
+        if file_count == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No processed data found for the selected files"
+            )
+        
+        # Create a "Combined" sheet with all data merged
+        if all_data:
+            combined_df = pd.concat(all_data, ignore_index=True)
+            combined_df = combined_df.drop_duplicates()  # Remove duplicates
+            
+            ws_combined = wb.create_sheet(title="Combined", index=0)  # Add as first sheet
+            
+            # Add data to combined worksheet
+            for r in dataframe_to_rows(combined_df, index=False, header=True):
+                ws_combined.append(r)
+            
+            # Style the header row
+            header_font = Font(bold=True, color="FFFFFF")
+            header_fill = PatternFill(start_color="4CAF50", end_color="4CAF50", fill_type="solid")
+            header_alignment = Alignment(horizontal="center", vertical="center")
+            
+            for cell in ws_combined[1]:
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = header_alignment
+            
+            # Auto-adjust column widths
+            for column in ws_combined.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)
+                ws_combined.column_dimensions[column_letter].width = adjusted_width
+        
+        # Save Excel to BytesIO
+        excel_buffer = BytesIO()
+        wb.save(excel_buffer)
+        excel_buffer.seek(0)
+        
+        # Return Excel file
+        from fastapi.responses import StreamingResponse
+        response = StreamingResponse(
+            content=excel_buffer,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        filename = f"merged_processed_files_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Download multiple files error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Download error: {str(e)}"
+        )
+
 @app.get("/api/database/status")
 async def database_status(session_id: str):
     """Check database connection status with detailed information"""
@@ -1448,6 +1632,79 @@ async def list_uploaded_files(session_id: str):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error retrieving files: {str(e)}"
+        )
+
+@app.get("/api/files/last-processed")
+async def get_last_processed_file(session_id: str):
+    """Get the most recently processed file"""
+    try:
+        # Verify session
+        verify_session(session_id)
+        
+        # Get database connection
+        from database_config.postgresql_config import PostgreSQLConfig
+        import psycopg2
+        
+        db_config = PostgreSQLConfig()
+        connection_params = db_config.get_connection_params()
+        connection = psycopg2.connect(**connection_params)
+        
+        cursor = connection.cursor()
+        # Get the most recently completed file (exclude template files)
+        cursor.execute("""
+            SELECT 
+                fu.id, 
+                fu.file_name, 
+                fu.upload_date, 
+                fu.uploaded_by, 
+                fu.processing_status,
+                fu.records_count,
+                fu.processed_date,
+                COALESCE(
+                    (SELECT COUNT(*) FROM company_data WHERE file_upload_id = fu.id AND processing_status = 'completed'),
+                    0
+                ) as processed_count
+            FROM file_upload fu
+            WHERE fu.processing_status = 'completed'
+            AND fu.file_name NOT LIKE '%template%'
+            AND fu.file_name IS NOT NULL
+            AND fu.file_name != ''
+            ORDER BY fu.processed_date DESC NULLS LAST, fu.upload_date DESC
+            LIMIT 1
+        """)
+        
+        file_row = cursor.fetchone()
+        cursor.close()
+        connection.close()
+        
+        if not file_row:
+            return {
+                "success": True,
+                "file": None,
+                "message": "No processed files found"
+            }
+        
+        last_file = {
+            "id": file_row[0],
+            "file_name": file_row[1],
+            "upload_date": file_row[2].isoformat() if file_row[2] else None,
+            "uploaded_by": file_row[3],
+            "processing_status": file_row[4],
+            "records_count": file_row[5],
+            "processed_date": file_row[6].isoformat() if file_row[6] else None,
+            "processed_count": file_row[7]
+        }
+        
+        return {
+            "success": True,
+            "file": last_file
+        }
+        
+    except Exception as e:
+        logger.error(f"Error retrieving last processed file: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving last processed file: {str(e)}"
         )
 
 @app.put("/api/files/{file_id}/status")

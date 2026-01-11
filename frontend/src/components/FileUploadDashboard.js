@@ -148,6 +148,13 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
   // Confirmation Dialog States
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null);
+
+  // Multi-file Download States
+  const [selectedFiles, setSelectedFiles] = useState(new Set());
+  const [downloadingMultiple, setDownloadingMultiple] = useState(false);
+
+  // Last Processed File State
+  const [lastProcessedFile, setLastProcessedFile] = useState(null);
   const [confirmMessage, setConfirmMessage] = useState('');
   const [confirmTitle, setConfirmTitle] = useState('');
 
@@ -172,12 +179,26 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
     }
   }, [sessionId]);
 
+  // Function to load last processed file
+  const loadLastProcessedFile = useCallback(async () => {
+    try {
+      const response = await fetch(API_ENDPOINTS.files.lastProcessed(sessionId));
+      if (response.ok) {
+        const data = await response.json();
+        setLastProcessedFile(data.file || null);
+      }
+    } catch (error) {
+      console.error('Failed to load last processed file:', error);
+    }
+  }, [sessionId]);
+
   // Check database status on component mount
   useEffect(() => {
     checkDatabaseStatus();
     loadUploadedFiles();
+    loadLastProcessedFile();
     setLastJobCheck(Date.now()); // Initialize job check time
-  }, [sessionId, checkDatabaseStatus, loadUploadedFiles]);
+  }, [sessionId, checkDatabaseStatus, loadUploadedFiles, loadLastProcessedFile]);
 
   // Countdown timer for next scheduled job (runs every second)
   useEffect(() => {
@@ -208,6 +229,7 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
         // Only update files data, don't refresh entire page
         const previousFiles = [...uploadedFiles];
         await loadUploadedFiles();
+        await loadLastProcessedFile();
         
         // Check if job status changed (could indicate scheduler ran)
         const response = await FileService.getUploadedFiles(sessionId);
@@ -660,6 +682,75 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
     }
   };
 
+  // Multi-file selection handlers
+  const handleToggleSelectFile = (fileId) => {
+    setSelectedFiles(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(fileId)) {
+        newSet.delete(fileId);
+      } else {
+        newSet.add(fileId);
+      }
+      return newSet;
+    });
+  };
+
+  const handleSelectAllFiles = (event) => {
+    if (event.target.checked) {
+      // Select only completed files
+      const completedFileIds = uploadedFiles
+        .filter(file => file.processing_status === 'completed')
+        .map(file => file.id);
+      setSelectedFiles(new Set(completedFileIds));
+    } else {
+      setSelectedFiles(new Set());
+    }
+  };
+
+  const handleBulkDownload = async () => {
+    if (selectedFiles.size === 0) {
+      setError('Please select at least one file to download');
+      return;
+    }
+
+    try {
+      setDownloadingMultiple(true);
+      setError('');
+      
+      const fileIds = Array.from(selectedFiles);
+      
+      if (fileIds.length === 1) {
+        // Single file download - use existing method
+        const fileId = fileIds[0];
+        const file = uploadedFiles.find(f => f.id === fileId);
+        await handleDownload(fileId, file?.file_name || file?.filename);
+      } else {
+        // Multiple files - download as merged Excel file
+        const result = await FileService.downloadMultipleFiles(sessionId, fileIds);
+        
+        // Create blob and download Excel file
+        const blob = new Blob([result], { 
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+        });
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `merged_processed_files_${new Date().toISOString().split('T')[0]}.xlsx`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+        
+        setSuccess(`Downloaded ${fileIds.length} files merged into one Excel file!`);
+        setSelectedFiles(new Set()); // Clear selection after download
+      }
+    } catch (error) {
+      setError(`Failed to download files: ${error.message}`);
+    } finally {
+      setDownloadingMultiple(false);
+    }
+  };
+
   const handleRetryProcessing = async (fileId, fileName) => {
     if (!window.confirm(`Retry processing for "${fileName}"?`)) {
       return;
@@ -676,6 +767,7 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
         setSuccess(`Processing started for "${fileName}"`);
         // Refresh file list to show updated status
         loadUploadedFiles();
+        loadLastProcessedFile();
       } else {
         setError(result.message || 'Failed to start processing');
       }
@@ -1112,8 +1204,87 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
                               </Box>
                             );
                           })}
-                          {/* Show most recent activity if no files are currently processing */}
-                          {uploadedFiles.filter(f => f.processing_status === 'processing').length === 0 && uploadedFiles.length > 0 && (
+                          {/* Show Last Processed File - Prominently displayed when no files currently processing */}
+                          {uploadedFiles.filter(f => f.processing_status === 'processing').length === 0 && lastProcessedFile && (
+                            <Box sx={{ 
+                              display: 'flex', 
+                              flexDirection: 'column',
+                              gap: 1.5,
+                              p: 2,
+                              borderRadius: 2,
+                              backgroundColor: 'success.light',
+                              border: '2px solid',
+                              borderColor: 'success.main',
+                              mt: 1.5,
+                              boxShadow: 2
+                            }}>
+                              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                                  <Box sx={{ 
+                                    width: 12, 
+                                    height: 12, 
+                                    borderRadius: '50%', 
+                                    backgroundColor: 'success.main',
+                                    animation: 'pulse 2s infinite'
+                                  }} />
+                                  <Typography variant="subtitle2" sx={{ 
+                                    fontWeight: 700,
+                                    color: 'success.dark',
+                                    textTransform: 'uppercase',
+                                    letterSpacing: '0.5px'
+                                  }}>
+                                    Last Processed File
+                                  </Typography>
+                                </Box>
+                                <Chip 
+                                  label="✓ Completed"
+                                  size="small"
+                                  color="success"
+                                  variant="filled"
+                                  sx={{ 
+                                    fontWeight: 700,
+                                    fontSize: '0.75rem',
+                                    '& .MuiChip-label': { px: 1.5 }
+                                  }}
+                                />
+                              </Box>
+                              
+                              <Box sx={{ pl: 3 }}>
+                                <Typography variant="body1" sx={{ 
+                                  fontWeight: 600,
+                                  color: 'text.primary',
+                                  mb: 1
+                                }}>
+                                  📁 {lastProcessedFile.file_name || lastProcessedFile.filename}
+                                </Typography>
+                                
+                                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, mb: 1 }}>
+                                  <Typography variant="body2" color="text.secondary">
+                                    🕒 Completed: {new Date(lastProcessedFile.processed_date || lastProcessedFile.upload_date).toLocaleString()}
+                                  </Typography>
+                                  <Typography variant="body2" color="text.secondary">
+                                    👤 By: {lastProcessedFile.uploaded_by}
+                                  </Typography>
+                                </Box>
+                                
+                                <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                                  <Typography variant="body2" sx={{ fontWeight: 600, color: 'success.dark' }}>
+                                    📊 Total Records: {lastProcessedFile.records_count || 0}
+                                  </Typography>
+                                  <Typography variant="body2" sx={{ fontWeight: 600, color: 'success.dark' }}>
+                                    ✅ Processed: {lastProcessedFile.processed_count || 0}
+                                  </Typography>
+                                  {lastProcessedFile.processed_count > 0 && (
+                                    <Typography variant="body2" sx={{ fontWeight: 600, color: 'success.dark' }}>
+                                      🎯 Success: {((lastProcessedFile.processed_count || 0) / (lastProcessedFile.records_count || 1) * 100).toFixed(1)}%
+                                    </Typography>
+                                  )}
+                                </Box>
+                              </Box>
+                            </Box>
+                          )}
+                          {/* Show most recent activity if no files are currently processing and no last processed file */}
+                          {uploadedFiles.filter(f => f.processing_status === 'processing').length === 0 && !lastProcessedFile && uploadedFiles.length > 0 && (
                             (() => {
                               const completedFiles = uploadedFiles.filter(f => f.processing_status === 'completed');
                               const pendingFiles = uploadedFiles.filter(f => f.processing_status === 'pending' || !f.processing_status);
@@ -1818,20 +1989,65 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
 
                   {/* Enhanced File Management Table */}
                   {uploadedFiles && uploadedFiles.length > 0 ? (
-                    <Box sx={{ width: '100%', overflow: 'auto' }}>
-                      <Table size="medium" sx={{ minWidth: 1000 }}>
-                        <TableHead>
-                          <TableRow sx={{ backgroundColor: 'grey.50' }}>
-                            <TableCell><strong>File Details</strong></TableCell>
-                            <TableCell><strong>Processing Status</strong></TableCell>
-                            <TableCell><strong>Data Statistics</strong></TableCell>
-                            <TableCell><strong>Actions</strong></TableCell>
-                          </TableRow>
-                        </TableHead>
-                        <TableBody>
-                          {uploadedFiles.map((file) => (
-                            <TableRow key={file.id} hover sx={{ '&:hover': { backgroundColor: 'grey.25' } }}>
-                              <TableCell>
+                    <>
+                      {/* Bulk Actions Toolbar */}
+                      <Box sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 2 }}>
+                        <Button
+                          variant="contained"
+                          color="primary"
+                          startIcon={<DownloadIcon />}
+                          onClick={handleBulkDownload}
+                          disabled={selectedFiles.size === 0 || downloadingMultiple}
+                        >
+                          {downloadingMultiple 
+                            ? 'Downloading...' 
+                            : `Download Selected (${selectedFiles.size})`}
+                        </Button>
+                        {selectedFiles.size > 0 && (
+                          <Button
+                            size="small"
+                            onClick={() => setSelectedFiles(new Set())}
+                          >
+                            Clear Selection
+                          </Button>
+                        )}
+                      </Box>
+
+                      <Box sx={{ width: '100%', overflow: 'auto' }}>
+                        <Table size="medium" sx={{ minWidth: 1000 }}>
+                          <TableHead>
+                            <TableRow sx={{ backgroundColor: 'grey.50' }}>
+                              <TableCell padding="checkbox">
+                                <Checkbox
+                                  indeterminate={
+                                    selectedFiles.size > 0 && 
+                                    selectedFiles.size < uploadedFiles.filter(f => f.processing_status === 'completed').length
+                                  }
+                                  checked={
+                                    uploadedFiles.filter(f => f.processing_status === 'completed').length > 0 &&
+                                    selectedFiles.size === uploadedFiles.filter(f => f.processing_status === 'completed').length
+                                  }
+                                  onChange={handleSelectAllFiles}
+                                  disabled={uploadedFiles.filter(f => f.processing_status === 'completed').length === 0}
+                                />
+                              </TableCell>
+                              <TableCell><strong>File Details</strong></TableCell>
+                              <TableCell><strong>Processing Status</strong></TableCell>
+                              <TableCell><strong>Data Statistics</strong></TableCell>
+                              <TableCell><strong>Actions</strong></TableCell>
+                            </TableRow>
+                          </TableHead>
+                          <TableBody>
+                            {uploadedFiles.map((file) => (
+                              <TableRow key={file.id} hover sx={{ '&:hover': { backgroundColor: 'grey.25' } }}>
+                                <TableCell padding="checkbox">
+                                  <Checkbox
+                                    checked={selectedFiles.has(file.id)}
+                                    onChange={() => handleToggleSelectFile(file.id)}
+                                    disabled={file.processing_status !== 'completed'}
+                                  />
+                                </TableCell>
+                                <TableCell>
                                 <Box>
                                   <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 0.5 }}>
                                     {file.file_name || file.filename}
@@ -1970,6 +2186,7 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
                         </TableBody>
                       </Table>
                     </Box>
+                    </>
                   ) : (
                     <Box sx={{ textAlign: 'center', py: 6 }}>
                       <DataIcon sx={{ fontSize: 60, color: 'grey.300', mb: 2 }} />
