@@ -468,7 +468,8 @@ class FileUploadProcessor:
                 scraping_df,
                 linkedin_column='LinkedIn_URL',
                 website_column='Company_Website',
-                company_name_column='Company_Name'
+                company_name_column='Company_Name',
+                file_upload_id=int(file_upload_id)  # Pass file_upload_id for progress tracking
             )
             
             # Update database with scraped data

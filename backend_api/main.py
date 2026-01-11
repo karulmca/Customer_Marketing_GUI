@@ -223,6 +223,38 @@ scheduler_state = {
 }
 _scheduler_lock = _threading.Lock()
 
+def _update_file_progress(file_upload_id: int, total: int, processed: int, 
+                         status_message: str = "", success: int = 0, errors: int = 0):
+    """Update progress tracking fields in file_upload table"""
+    try:
+        from database_config.postgresql_config import PostgreSQLConfig
+        db_config = PostgreSQLConfig()
+        
+        progress_pct = (processed / total * 100) if total > 0 else 0
+        
+        query = """
+        UPDATE file_upload
+        SET processed_records = %s,
+            total_records = %s,
+            progress_percentage = %s,
+            current_status_message = %s,
+            last_progress_update = CURRENT_TIMESTAMP,
+            success_count = %s,
+            error_count = %s,
+            processing_start_time = COALESCE(processing_start_time, CURRENT_TIMESTAMP)
+        WHERE id = %s
+        """
+        
+        db_config.execute_query(
+            query, 
+            (processed, total, progress_pct, status_message, success, errors, file_upload_id)
+        )
+        
+        logger.info(f"📊 Progress updated: {file_upload_id} - {processed}/{total} ({progress_pct:.1f}%) - {status_message}")
+        
+    except Exception as e:
+        logger.error(f"Failed to update progress: {e}")
+
 def _ensure_scheduler():
     """Create the background scheduler if available and not yet created."""
     global scheduler
@@ -1135,6 +1167,85 @@ async def get_processing_status(file_id: str, session_id: str):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Status check error: {str(e)}"
+        )
+
+@app.get("/api/files/progress/{file_upload_id}")
+async def get_file_progress(file_upload_id: int, session_id: str = ""):
+    """Get real-time processing progress for a file upload"""
+    try:
+        # Verify session if provided
+        if session_id:
+            try:
+                verify_session(session_id)
+            except:
+                pass  # Allow without session for now
+        
+        from database_config.postgresql_config import PostgreSQLConfig
+        db_config = PostgreSQLConfig()
+        
+        query = """
+        SELECT 
+            id,
+            file_name,
+            processing_status,
+            total_records,
+            processed_records,
+            progress_percentage,
+            current_status_message,
+            processing_start_time,
+            last_progress_update,
+            success_count,
+            error_count,
+            processed_date,
+            processing_error
+        FROM file_upload
+        WHERE id = %s
+        """
+        
+        result = db_config.execute_query(query, (file_upload_id,))
+        
+        if not result or len(result) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="File upload not found"
+            )
+        
+        row = result[0]
+        
+        # Calculate estimated time remaining
+        eta_seconds = None
+        if row[8]:  # last_progress_update exists
+            elapsed = (datetime.now() - row[7]).total_seconds() if row[7] else 0  # processing_start_time
+            if row[4] and row[4] > 0 and row[3] and row[3] > 0:  # processed_records and total_records
+                rate = row[4] / elapsed if elapsed > 0 else 0
+                remaining = row[3] - row[4]
+                eta_seconds = remaining / rate if rate > 0 else None
+        
+        return {
+            "file_upload_id": row[0],
+            "file_name": row[1],
+            "status": row[2],
+            "total_records": row[3] or 0,
+            "processed_records": row[4] or 0,
+            "progress_percentage": float(row[5] or 0),
+            "current_status_message": row[6] or "",
+            "processing_start_time": row[7].isoformat() if row[7] else None,
+            "last_progress_update": row[8].isoformat() if row[8] else None,
+            "success_count": row[9] or 0,
+            "error_count": row[10] or 0,
+            "processed_date": row[11].isoformat() if row[11] else None,
+            "processing_error": row[12],
+            "eta_seconds": int(eta_seconds) if eta_seconds else None,
+            "is_complete": row[2] in ['completed', 'failed', 'error']
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting progress: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Progress check error: {str(e)}"
         )
 
 @app.get("/api/files/download/{file_id}")
@@ -2974,10 +3085,19 @@ async def startup_event():
     """Initialize services on startup"""
     logger.info("🚀 Starting up application services...")
     
-    # Auto-start scheduler with config settings
+    # Check if we should auto-start scheduler (only in production)
+    environment = os.getenv("ENVIRONMENT", "development")
+    auto_start_scheduler = environment == "production"
+    
+    if not auto_start_scheduler:
+        logger.info(f"⚠️ Scheduler auto-start disabled in {environment} environment")
+        logger.info("💡 Use the API endpoint /api/jobs/scheduler/start to manually start the scheduler")
+        return
+    
+    # Auto-start scheduler with config settings (production only)
     try:
         interval_minutes = get_scheduler_interval()
-        logger.info(f"📅 Auto-starting scheduler with {interval_minutes} minute interval")
+        logger.info(f"📅 Auto-starting scheduler with {interval_minutes} minute interval (production mode)")
         
         # Start the scheduler automatically
         _ensure_scheduler()
@@ -3012,13 +3132,8 @@ async def startup_event():
                     scheduler_state["job_added"] = True
                     logger.info(f"✅ Scheduled job added: process pending uploads every {interval_minutes} minutes (first run: immediately)")
                     
-                    # Run immediately on startup to process any pending files
-                    logger.info("🚀 Running initial job execution to process pending files...")
-                    try:
-                        _process_pending_uploads()
-                        logger.info("✅ Initial job execution completed")
-                    except Exception as e:
-                        logger.error(f"❌ Initial job execution failed: {e}")
+                    # Schedule initial processing in background (don't block startup)
+                    logger.info("📋 Initial job execution will run immediately in background")
                     
                 except Exception as e:
                     logger.error(f"❌ Failed to add scheduled job: {e}")

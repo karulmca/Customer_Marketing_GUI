@@ -645,7 +645,8 @@ class CompleteCompanyScraper:
     # =================== MAIN PROCESSING FUNCTION ===================
     
     def process_companies(self, df: pd.DataFrame, linkedin_column: str = 'LinkedIn_URL', 
-                         website_column: str = 'Company_Website', company_name_column: str = 'Company_Name') -> pd.DataFrame:
+                         website_column: str = 'Company_Website', company_name_column: str = 'Company_Name',
+                         file_upload_id: int = None) -> pd.DataFrame:
         """Process companies to extract LinkedIn data and website revenue"""
         
         # Initialize new columns
@@ -659,47 +660,73 @@ class CompleteCompanyScraper:
         total_companies = len(df)
         logger.info(f"Starting processing of {total_companies} companies")
         
+        # Initialize progress tracking
+        success_count = 0
+        error_count = 0
+        
         for index, row in df.iterrows():
             logger.info(f"Processing company {index + 1}/{total_companies}: {row.get(company_name_column, 'Unknown')}")
             
             # Extract LinkedIn data (company size and industry)
-            linkedin_url = row.get(linkedin_column, '')
-            if linkedin_url:
-                linkedin_data = self.extract_linkedin_data(linkedin_url)
-                # Enhanced columns (detailed output)
-                df.at[index, 'Company_Size_Enhanced'] = linkedin_data['company_size']
-                df.at[index, 'Industry_Enhanced'] = linkedin_data['industry']
-                df.at[index, 'LinkedIn_Status'] = linkedin_data['linkedin_status']
+            try:
+                linkedin_url = row.get(linkedin_column, '')
+                if linkedin_url:
+                    linkedin_data = self.extract_linkedin_data(linkedin_url)
+                    # Enhanced columns (detailed output)
+                    df.at[index, 'Company_Size_Enhanced'] = linkedin_data['company_size']
+                    df.at[index, 'Industry_Enhanced'] = linkedin_data['industry']
+                    df.at[index, 'LinkedIn_Status'] = linkedin_data['linkedin_status']
+                    
+                    # Also populate original columns if they exist (for display compatibility)
+                    if 'Size' in df.columns:
+                        df.at[index, 'Size'] = linkedin_data['company_size']
+                    if 'Company_Size' in df.columns:
+                        df.at[index, 'Company_Size'] = linkedin_data['company_size']
+                    if 'Industry' in df.columns:
+                        df.at[index, 'Industry'] = linkedin_data['industry']
+                else:
+                    df.at[index, 'LinkedIn_Status'] = 'No LinkedIn URL'
                 
-                # Also populate original columns if they exist (for display compatibility)
-                if 'Size' in df.columns:
-                    df.at[index, 'Size'] = linkedin_data['company_size']
-                if 'Company_Size' in df.columns:
-                    df.at[index, 'Company_Size'] = linkedin_data['company_size']
-                if 'Industry' in df.columns:
-                    df.at[index, 'Industry'] = linkedin_data['industry']
-            else:
-                df.at[index, 'LinkedIn_Status'] = 'No LinkedIn URL'
-            
-            # Extract revenue from website
-            website_url = row.get(website_column, '')
-            company_name = row.get(company_name_column, '')
-            if website_url:
-                revenue_data = self.extract_revenue_from_website(website_url, company_name)
-                # Enhanced columns (detailed output)
-                df.at[index, 'Revenue_Enhanced'] = revenue_data['revenue']
-                df.at[index, 'Revenue_Source'] = revenue_data['revenue_source']
-                df.at[index, 'Revenue_Status'] = revenue_data['revenue_status']
+                # Extract revenue from website
+                website_url = row.get(website_column, '')
+                company_name = row.get(company_name_column, '')
+                if website_url:
+                    revenue_data = self.extract_revenue_from_website(website_url, company_name)
+                    # Enhanced columns (detailed output)
+                    df.at[index, 'Revenue_Enhanced'] = revenue_data['revenue']
+                    df.at[index, 'Revenue_Source'] = revenue_data['revenue_source']
+                    df.at[index, 'Revenue_Status'] = revenue_data['revenue_status']
+                    
+                    # Also populate original column if it exists (for display compatibility)
+                    if 'Revenue' in df.columns:
+                        df.at[index, 'Revenue'] = revenue_data['revenue']
+                else:
+                    df.at[index, 'Revenue_Status'] = 'No Website URL'
                 
-                # Also populate original column if it exists (for display compatibility)
-                if 'Revenue' in df.columns:
-                    df.at[index, 'Revenue'] = revenue_data['revenue']
-            else:
-                df.at[index, 'Revenue_Status'] = 'No Website URL'
+                success_count += 1
+                
+            except Exception as e:
+                logger.error(f"Error processing company {company_name}: {e}")
+                error_count += 1
             
-            # Progress update
+            # Progress update every 5 companies
             if (index + 1) % 5 == 0:
                 logger.info(f"Processed {index + 1}/{total_companies} companies")
+                
+                # Update progress in database if file_upload_id provided
+                if file_upload_id:
+                    try:
+                        from backend_api.main import _update_file_progress
+                        _update_file_progress(
+                            file_upload_id=file_upload_id,
+                            total=total_companies,
+                            processed=index + 1,
+                            status_message=f"Scraping company {index + 1}/{total_companies}: {company_name[:40]}",
+                            success=success_count,
+                            errors=error_count
+                        )
+                    except Exception as prog_err:
+                        logger.error(f"Failed to update progress: {prog_err}")
         
         logger.info("Processing completed")
         return df

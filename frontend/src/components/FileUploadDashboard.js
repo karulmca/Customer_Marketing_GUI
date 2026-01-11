@@ -122,6 +122,7 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
   const [validating, setValidating] = useState(false);
   const [processingFiles, setProcessingFiles] = useState(new Set()); // Track which files are being processed
   const [refreshing, setRefreshing] = useState(false); // Track when auto-refresh is happening
+  const [fileProgress, setFileProgress] = useState({}); // Track real-time progress for each file: {fileId: {progress_percentage, current_status_message, ...}}
   const [nextJobCountdown, setNextJobCountdown] = useState(120); // Countdown in seconds (2 minutes)
   const [lastJobCheck, setLastJobCheck] = useState(Date.now()); // Track when we last checked for jobs
   
@@ -289,7 +290,57 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
     }, refreshInterval);
 
     return () => clearInterval(autoRefreshInterval);
-  }, [loadUploadedFiles, uploadedFiles, processingFiles.size, sessionId]);  const onDrop = useCallback(async (acceptedFiles) => {
+  }, [loadUploadedFiles, uploadedFiles, processingFiles.size, sessionId]);
+
+  // Real-time progress polling for processing files
+  useEffect(() => {
+    const pollingInterval = setInterval(async () => {
+      if (processingFiles.size === 0) return;
+
+      try {
+        // Poll progress for all processing files
+        const progressPromises = Array.from(processingFiles).map(async (fileId) => {
+          try {
+            const response = await fetch(
+              `${API_ENDPOINTS.BASE_URL}/api/files/progress/${fileId}?session_id=${sessionId}`,
+              {
+                method: 'GET',
+                headers: {
+                  'Content-Type': 'application/json',
+                }
+              }
+            );
+
+            if (response.ok) {
+              const data = await response.json();
+              return { fileId, progress: data };
+            }
+          } catch (err) {
+            console.error(`Error polling progress for file ${fileId}:`, err);
+          }
+          return null;
+        });
+
+        const results = await Promise.all(progressPromises);
+        
+        // Update progress state
+        const newProgress = { ...fileProgress };
+        results.forEach(result => {
+          if (result && result.progress) {
+            newProgress[result.fileId] = result.progress;
+          }
+        });
+        setFileProgress(newProgress);
+
+      } catch (error) {
+        console.error('Progress polling error:', error);
+      }
+    }, 2000); // Poll every 2 seconds
+
+    return () => clearInterval(pollingInterval);
+  }, [processingFiles, sessionId, fileProgress]);
+
+  const onDrop = useCallback(async (acceptedFiles) => {
     const file = acceptedFiles[0];
     if (!file) return;
 
@@ -1801,16 +1852,31 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
                             </TableCell>
                             <TableCell align="center">{file.records_count || file.total_rows}</TableCell>
                             <TableCell align="center">
-                              <Chip
-                                label={file.processing_status || 'pending'}
-                                size="small"
-                                color={
-                                  file.processing_status === 'completed' ? 'success' :
-                                  file.processing_status === 'failed' ? 'error' :
-                                  processingFiles.has(file.id) ? 'primary' : 'default'
-                                }
-                                variant="outlined"
-                              />
+                              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
+                                <Chip
+                                  label={file.processing_status || 'pending'}
+                                  size="small"
+                                  color={
+                                    file.processing_status === 'completed' ? 'success' :
+                                    file.processing_status === 'failed' ? 'error' :
+                                    processingFiles.has(file.id) ? 'primary' : 'default'
+                                  }
+                                  variant="outlined"
+                                />
+                                {/* Mini Progress Bar for Processing Files */}
+                                {(processingFiles.has(file.id) || file.processing_status === 'processing') && fileProgress[file.id] && (
+                                  <Box sx={{ width: '100%', mt: 0.5 }}>
+                                    <LinearProgress 
+                                      variant="determinate" 
+                                      value={fileProgress[file.id].progress_percentage || 0}
+                                      sx={{ height: 4, borderRadius: 1 }}
+                                    />
+                                    <Typography variant="caption" sx={{ fontSize: '0.65rem', color: 'text.secondary' }}>
+                                      {fileProgress[file.id].progress_percentage?.toFixed(0) || 0}%
+                                    </Typography>
+                                  </Box>
+                                )}
+                              </Box>
                             </TableCell>
                             <TableCell align="center">
                               <Typography variant="caption">
@@ -2080,6 +2146,31 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
                                           file.processing_status === 'completed' ? <CheckIcon /> :
                                           file.processing_status === 'failed' ? <ErrorIcon /> : <InfoIcon />}
                                   />
+                                  
+                                  {/* Real-time Progress Bar */}
+                                  {(processingFiles.has(file.id) || file.processing_status === 'processing') && fileProgress[file.id] && (
+                                    <Box sx={{ width: '100%', mt: 1 }}>
+                                      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                                        <Typography variant="caption" color="text.secondary">
+                                          {fileProgress[file.id].progress_percentage?.toFixed(1) || 0}%
+                                        </Typography>
+                                        <Typography variant="caption" color="text.secondary">
+                                          {fileProgress[file.id].processed_records || 0}/{fileProgress[file.id].total_records || 0}
+                                        </Typography>
+                                      </Box>
+                                      <LinearProgress 
+                                        variant="determinate" 
+                                        value={fileProgress[file.id].progress_percentage || 0}
+                                        sx={{ height: 8, borderRadius: 1 }}
+                                      />
+                                      {fileProgress[file.id].current_status_message && (
+                                        <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem', mt: 0.5, display: 'block' }}>
+                                          {fileProgress[file.id].current_status_message}
+                                        </Typography>
+                                      )}
+                                    </Box>
+                                  )}
+                                  
                                   {file.error_message && (
                                     <Typography variant="caption" color="error" sx={{ fontSize: '0.7rem', maxWidth: 200 }}>
                                       ⚠️ {file.error_message}
@@ -2091,17 +2182,25 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
                               <TableCell>
                                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                                   <Typography variant="body2">
-                                    📈 Total: {file.records_count || 0}
+                                    📈 Total: {fileProgress[file.id]?.total_records || file.records_count || 0}
                                   </Typography>
                                   <Typography variant="body2" color="success.main">
-                                    ✅ Processed: {file.processed_count || 0}
+                                    ✅ Processed: {fileProgress[file.id]?.processed_records || file.processed_count || 0}
+                                  </Typography>
+                                  <Typography variant="body2" color="primary.main">
+                                    ✓ Success: {fileProgress[file.id]?.success_count || file.success_count || 0}
                                   </Typography>
                                   <Typography variant="body2" color="error.main">
-                                    ❌ Failed: {file.failed_count || 0}
+                                    ❌ Errors: {fileProgress[file.id]?.error_count || file.failed_count || file.error_count || 0}
                                   </Typography>
                                   {file.processing_status === 'completed' && (
                                     <Typography variant="caption" color="text.secondary">
                                       🎯 Success Rate: {((file.processed_count || 0) / (file.records_count || 1) * 100).toFixed(1)}%
+                                    </Typography>
+                                  )}
+                                  {(processingFiles.has(file.id) || file.processing_status === 'processing') && fileProgress[file.id]?.processing_start_time && (
+                                    <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                                      ⏱️ Started: {new Date(fileProgress[file.id].processing_start_time).toLocaleTimeString()}
                                     </Typography>
                                   )}
                                 </Box>
