@@ -2125,6 +2125,24 @@ async def process_existing_file(file_id: str, session_id: str, scraping_enabled:
         if not excel_bytes:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to reconstruct uploaded file bytes from database raw_data")
 
+        # Delete old processed data before reprocessing
+        try:
+            conn = psycopg2.connect(**conn_params)
+            cursor = conn.cursor()
+            
+            # Delete old data from company_data table
+            cursor.execute("DELETE FROM company_data WHERE file_upload_id = %s", (file_id,))
+            deleted_count = cursor.rowcount
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            logger.info(f"🗑️ Deleted {deleted_count} old records from company_data for file_id: {file_id}")
+        except Exception as del_error:
+            logger.error(f"⚠️ Failed to delete old data for file {file_id}: {del_error}")
+            # Continue anyway - don't fail the reprocess
+
         # Create in-memory job with normalized bytes
         job_id = str(uuid.uuid4())
         processing_jobs[file_id] = {
