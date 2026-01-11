@@ -2996,10 +2996,11 @@ async def startup_event():
                     except:
                         pass
                     
-                    # Add job with interval from config
+                    # Add job with interval from config - start immediately
+                    from datetime import datetime, timezone
                     scheduler.add_job(
                         _process_pending_uploads,
-                        IntervalTrigger(minutes=interval_minutes),
+                        IntervalTrigger(minutes=interval_minutes, start_date=datetime.now(timezone.utc)),
                         id=SCHEDULER_JOB_ID,
                         replace_existing=True,
                         max_instances=1,
@@ -3009,7 +3010,15 @@ async def startup_event():
                     
                     scheduler_state["running"] = True
                     scheduler_state["job_added"] = True
-                    logger.info(f"✅ Scheduled job added: process pending uploads every {interval_minutes} minutes")
+                    logger.info(f"✅ Scheduled job added: process pending uploads every {interval_minutes} minutes (first run: immediately)")
+                    
+                    # Run immediately on startup to process any pending files
+                    logger.info("🚀 Running initial job execution to process pending files...")
+                    try:
+                        _process_pending_uploads()
+                        logger.info("✅ Initial job execution completed")
+                    except Exception as e:
+                        logger.error(f"❌ Initial job execution failed: {e}")
                     
                 except Exception as e:
                     logger.error(f"❌ Failed to add scheduled job: {e}")
