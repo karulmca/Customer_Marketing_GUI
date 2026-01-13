@@ -1711,12 +1711,21 @@ async def list_uploaded_files(session_id: str):
         cursor = connection.cursor()
         cursor.execute("""
             SELECT id, file_name, upload_date, uploaded_by, processing_status, 
-                   records_count, file_size, processing_error
+                   records_count, file_size, processing_error,
+                   COALESCE(total_records, 0) as total_records,
+                   COALESCE(processed_records, 0) as processed_records,
+                   COALESCE(progress_percentage, 0) as progress_percentage
             FROM file_upload 
             ORDER BY upload_date DESC
         """)
         
         files = cursor.fetchall()
+        
+        # DEBUG: Log first few rows to see what we're getting
+        if files:
+            logger.info(f"🔍 DEBUG: First file row data: {files[0]}")
+            logger.info(f"🔍 DEBUG: Progress fields - total_records: {files[0][8]}, processed_records: {files[0][9]}, progress_percentage: {files[0][10]}")
+        
         cursor.close()
         connection.close()
         
@@ -1730,7 +1739,10 @@ async def list_uploaded_files(session_id: str):
                 "processing_status": file_row[4],
                 "records_count": file_row[5],
                 "file_size": file_row[6],
-                "processing_error": file_row[7]
+                "processing_error": file_row[7],
+                "total_records": file_row[8],
+                "processed_records": file_row[9],
+                "progress_percentage": file_row[10]
             })
         
         return {
@@ -2487,13 +2499,13 @@ async def get_uploaded_files(session_id: str):
             cursor.execute(
                 """
                 SELECT fu.id, fu.file_name, fu.upload_date, fu.uploaded_by, fu.processing_status, 
-                       fu.records_count,
-                       COUNT(cd.id) as total_records,
-                       COUNT(CASE WHEN cd.processing_status = 'completed' THEN 1 END) as processed_count,
-                       COUNT(CASE WHEN cd.processing_status = 'failed' THEN 1 END) as failed_count
+                       fu.records_count, fu.file_size, fu.processing_error,
+                       COALESCE(fu.total_records, 0) as total_records,
+                       COALESCE(fu.processed_records, 0) as processed_records,
+                       COALESCE(fu.progress_percentage, 0) as progress_percentage,
+                       COALESCE(fu.success_count, 0) as success_count,
+                       COALESCE(fu.error_count, 0) as error_count
                 FROM file_upload fu
-                LEFT JOIN company_data cd ON fu.id = cd.file_upload_id
-                GROUP BY fu.id, fu.file_name, fu.upload_date, fu.uploaded_by, fu.processing_status, fu.records_count
                 ORDER BY fu.upload_date DESC
                 """
             )
@@ -2513,9 +2525,14 @@ async def get_uploaded_files(session_id: str):
                     "status": r[4],
                     "processing_status": r[4],
                     "total_rows": r[5],
-                    "records_count": r[6],  # Actual count from company_data table
-                    "processed_count": r[7],
-                    "failed_count": r[8]
+                    "records_count": r[5],
+                    "file_size": r[6],
+                    "processing_error": r[7],
+                    "total_records": r[8],
+                    "processed_records": r[9],
+                    "progress_percentage": r[10],
+                    "success_count": r[11],
+                    "error_count": r[12]
                 }
                 # Clean all values for JSON serialization
                 from backend_api.main import _clean_for_json_serialization

@@ -175,6 +175,20 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
     try {
       const response = await FileService.getUploadedFiles(sessionId);
       setUploadedFiles(response.files || []);
+      
+      // Update fileProgress state with progress data from API
+      const newProgress = {};
+      (response.files || []).forEach(file => {
+        if (file.processing_status === 'processing' || file.total_records > 0) {
+          newProgress[file.id] = {
+            progress_percentage: Number(file.progress_percentage) || 0,
+            total_records: Number(file.total_records) || 0,
+            processed_records: Number(file.processed_records) || 0
+          };
+        }
+      });
+      setFileProgress(newProgress);
+      
     } catch (error) {
       console.error('Failed to load uploaded files:', error);
     }
@@ -257,7 +271,8 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
         processingFiles.forEach(fileId => {
           const file = files.find(f => f.id === fileId);
           if (file) {
-            if (file.processing_status === 'processing' || file.processing_status === 'pending') {
+            // Only keep in Set if file is actually still processing
+            if (file.processing_status === 'processing') {
               stillProcessing.add(fileId);
             } else if (file.processing_status === 'completed' || file.processing_status === 'failed') {
               hasCompletedFiles = true;
@@ -274,8 +289,9 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
         });
         
         // Also scan all files and add any with "processing" status that aren't already tracked
+        // Note: Only add files that are ACTUALLY processing, not pending
         files.forEach(file => {
-          if ((file.processing_status === 'processing' || file.processing_status === 'pending') && !stillProcessing.has(file.id)) {
+          if (file.processing_status === 'processing' && !stillProcessing.has(file.id)) {
             console.log(`🔍 Found processing file not in Set: ${file.file_name} (ID: ${file.id})`);
             stillProcessing.add(file.id);
           }
@@ -1880,17 +1896,27 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
                                   }
                                   variant="outlined"
                                 />
-                                {/* Mini Progress Bar for Processing Files */}
-                                {(processingFiles.has(file.id) || file.processing_status === 'processing') && fileProgress[file.id] && (
+                                {/* Progress Bar and Record Count for Processing Files */}
+                                {(processingFiles.has(file.id) || file.processing_status === 'processing') && (
                                   <Box sx={{ width: '100%', mt: 0.5 }}>
-                                    <LinearProgress 
-                                      variant="determinate" 
-                                      value={fileProgress[file.id].progress_percentage || 0}
-                                      sx={{ height: 4, borderRadius: 1 }}
-                                    />
-                                    <Typography variant="caption" sx={{ fontSize: '0.65rem', color: 'text.secondary' }}>
-                                      {fileProgress[file.id].progress_percentage?.toFixed(0) || 0}%
-                                    </Typography>
+                                    {fileProgress[file.id] && (
+                                      <>
+                                        <LinearProgress 
+                                          variant="determinate" 
+                                          value={fileProgress[file.id].progress_percentage || 0}
+                                          sx={{ height: 6, borderRadius: 1, mb: 0.5 }}
+                                        />
+                                        <Typography variant="caption" sx={{ fontSize: '0.7rem', color: 'text.secondary' }}>
+                                          {(Number(fileProgress[file.id].progress_percentage) || 0).toFixed(0)}% 
+                                          ({fileProgress[file.id].processed_records || 0}/{fileProgress[file.id].total_records || 0} records)
+                                        </Typography>
+                                      </>
+                                    )}
+                                    {!fileProgress[file.id] && (
+                                      <Typography variant="caption" sx={{ fontSize: '0.7rem', color: 'text.secondary' }}>
+                                        Initializing...
+                                      </Typography>
+                                    )}
                                   </Box>
                                 )}
                               </Box>
@@ -2171,7 +2197,7 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
                                         <>
                                           <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                                             <Typography variant="caption" color="text.secondary">
-                                              {fileProgress[file.id].progress_percentage?.toFixed(1) || 0}%
+                                              {(Number(fileProgress[file.id].progress_percentage) || 0).toFixed(1)}%
                                             </Typography>
                                             <Typography variant="caption" color="text.secondary">
                                               {fileProgress[file.id].processed_records || 0}/{fileProgress[file.id].total_records || 0}
