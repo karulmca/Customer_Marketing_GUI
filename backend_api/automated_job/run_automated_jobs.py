@@ -81,6 +81,11 @@ def normalize_raw_data_to_df(raw_data: Any) -> pd.DataFrame:
 
 
 def run_once(limit: int = 10):
+    """
+    Process pending files ONE AT A TIME to ensure proper status transitions.
+    Only moves to the next file after the current one completes (success or failure).
+    This prevents multiple files from being marked as 'processing' simultaneously.
+    """
     cfg = PostgreSQLConfig()
     params = cfg.get_connection_params()
     import psycopg2
@@ -88,40 +93,56 @@ def run_once(limit: int = 10):
     conn = psycopg2.connect(**params)
     cursor = conn.cursor()
 
-    # Select pending uploads
-    cursor.execute("SELECT id, raw_data, file_name FROM file_upload WHERE processing_status = 'pending' ORDER BY upload_date ASC LIMIT %s", (limit,))
-    rows = cursor.fetchall()
-    if not rows:
-        logger.info("No pending uploads to process.")
-        cursor.close()
-        conn.close()
-        return {"success": True, "processed": 0, "successful": 0, "failed": 0}
-
     # Use the existing FileUploadProcessor to perform the canonical processing flow
     from database_config.file_upload_processor import FileUploadProcessor
 
     success_count = 0
     failure_count = 0
+    processed_count = 0
 
-    for r in rows:
-        file_id = r[0]
-        filename = r[2] or f"file_{file_id}"
+    # Process files ONE AT A TIME up to the limit
+    for iteration in range(limit):
+        # Re-query to get the next pending file (ensures we get the latest state)
+        cursor.execute("""
+            SELECT id, raw_data, file_name 
+            FROM file_upload 
+            WHERE processing_status = 'pending' 
+            ORDER BY upload_date ASC 
+            LIMIT 1
+        """)
+        
+        row = cursor.fetchone()
+        
+        # If no more pending files, we're done
+        if not row:
+            if iteration == 0:
+                logger.info("No pending uploads to process.")
+            else:
+                logger.info(f"No more pending uploads. Processed {processed_count} file(s).")
+            break
+        
+        file_id = row[0]
+        filename = row[2] or f"file_{file_id}"
+        processed_count += 1
 
-        logger.info(f"Processing pending file id={file_id} filename={filename} via FileUploadProcessor")
+        logger.info(f"🔄 Processing file {processed_count}/{limit}: id={file_id} filename={filename}")
 
         try:
             fup = FileUploadProcessor()
-            # This will mark the job as started, insert rows into company_data, perform scraping, and sync completion
+            # This will mark the job as started (pending -> processing), 
+            # insert rows into company_data, perform scraping, 
+            # and sync completion (processing -> completed/failed)
             ok = fup.process_uploaded_file(file_id)
+            
             if ok:
                 success_count += 1
-                logger.info(f"✅ FileUploadProcessor processed file {file_id}")
+                logger.info(f"✅ Successfully processed file {file_id} ({filename})")
             else:
                 failure_count += 1
-                logger.error(f"❌ FileUploadProcessor failed for file {file_id}")
+                logger.error(f"❌ Processing failed for file {file_id} ({filename})")
 
         except Exception as e:
-            logger.exception(f"Processing failed for file {file_id}: {e}")
+            logger.exception(f"❌ Processing error for file {file_id} ({filename}): {e}")
             failure_count += 1
             # Attempt to mark failed
             try:
@@ -129,12 +150,16 @@ def run_once(limit: int = 10):
                 fup.sync_processing_completion(file_id, 'failed', 0, str(e))
             except Exception as e2:
                 logger.error(f"Also failed to mark file {file_id} failed: {e2}")
+        
+        # Important: After each file completes, we loop back and fetch the next pending file
+        # This ensures only ONE file is in 'processing' status at any time
 
-    total = success_count + failure_count
     cursor.close()
     conn.close()
 
-    return {"success": True, "processed": total, "successful": success_count, "failed": failure_count}
+    logger.info(f"📊 Batch processing summary: Processed={processed_count}, Successful={success_count}, Failed={failure_count}")
+    
+    return {"success": True, "processed": processed_count, "successful": success_count, "failed": failure_count}
 
     cursor.close()
     conn.close()
