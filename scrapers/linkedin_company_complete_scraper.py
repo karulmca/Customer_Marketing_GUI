@@ -648,6 +648,11 @@ class CompleteCompanyScraper:
                          website_column: str = 'Company_Website', company_name_column: str = 'Company_Name',
                          file_upload_id: int = None) -> pd.DataFrame:
         """Process companies to extract LinkedIn data and website revenue"""
+
+        df = df.copy()
+        for column in ('Size', 'Company_Size', 'Industry', 'Revenue'):
+            if column in df.columns:
+                df[column] = df[column].astype(object)
         
         # Initialize new columns
         df['Company_Size_Enhanced'] = 'Not Processed'
@@ -665,7 +670,8 @@ class CompleteCompanyScraper:
         error_count = 0
         
         for index, row in df.iterrows():
-            logger.info(f"Processing company {index + 1}/{total_companies}: {row.get(company_name_column, 'Unknown')}")
+            company_name = row.get(company_name_column, '')
+            logger.info(f"Processing company {index + 1}/{total_companies}: {company_name or 'Unknown'}")
             
             # Extract LinkedIn data (company size and industry)
             try:
@@ -689,7 +695,6 @@ class CompleteCompanyScraper:
                 
                 # Extract revenue from website
                 website_url = row.get(website_column, '')
-                company_name = row.get(company_name_column, '')
                 if website_url:
                     revenue_data = self.extract_revenue_from_website(website_url, company_name)
                     # Enhanced columns (detailed output)
