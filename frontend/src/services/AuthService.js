@@ -25,10 +25,8 @@ api.interceptors.response.use(
       localStorage.removeItem('sessionId');
       localStorage.removeItem('userInfo');
       
-      // Reload the page to force re-authentication
-      if (window.location.pathname !== '/') {
-        window.location.href = '/';
-      }
+      // Reset in-memory authentication state as well as stored session data.
+      window.location.href = '/';
     }
     
     throw error;

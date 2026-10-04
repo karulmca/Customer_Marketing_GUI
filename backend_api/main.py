@@ -76,14 +76,14 @@ cors_origins = [
     "http://localhost:3000", 
     "http://localhost:3001", 
     "http://127.0.0.1:3000",
-    "http://127.0.0.1:3001"
+    "http://127.0.0.1:3001",
+    "https://company-scraper-frontend-nddn.onrender.com"
 ]
 
 # Add production origins
 environment = os.getenv("ENVIRONMENT", "development")
 if environment == "production":
     cors_origins.extend([
-        "https://company-scraper-frontend-nddn.onrender.com",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         # Add any additional production domains here
