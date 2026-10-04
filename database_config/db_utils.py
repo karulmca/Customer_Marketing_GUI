@@ -65,46 +65,41 @@ class DatabaseConnection:
             if not self.manager or not self.manager.engine:
                 print("❌ Database not connected")
                 return False
-            
-            # Try fast pandas to_sql first
-            try:
-                df.to_sql(
-                    table_name,
-                    self.manager.engine,
-                    if_exists='append',
-                    index=False,
-                    method='multi'
-                )
-                print(f"✅ Inserted {len(df)} records into {table_name} using to_sql")
-                return True
-            except Exception as e_to_sql:
-                import traceback
-                print(f"⚠️ to_sql failed: {e_to_sql}")
-                print(traceback.format_exc())
-                # Fallback: use SQLAlchemy core insert in chunks
-                try:
-                    from sqlalchemy import Table, MetaData
-                    meta = MetaData()
-                    table = Table(table_name, meta, autoload_with=self.manager.engine)
-                    records = df.where(pd.notnull(df), None).to_dict(orient='records')
-                    chunk_size = 500
-                    inserted = 0
-                    with self.manager.engine.begin() as conn:
-                        for i in range(0, len(records), chunk_size):
-                            chunk = records[i:i+chunk_size]
-                            conn.execute(table.insert(), chunk)
-                            inserted += len(chunk)
-                    print(f"✅ Inserted {inserted} records into {table_name} using SQLAlchemy core fallback")
-                    return True
-                except Exception as e_core:
-                    import traceback
-                    print(f"❌ Core insert fallback failed: {e_core}")
-                    print(traceback.format_exc())
-                    return False
-            
+
+            from datetime import datetime
+            import json
+            from sqlalchemy import MetaData, Table
+            from sqlalchemy.dialects.postgresql import JSONB
+            from sqlalchemy.types import DateTime, JSON as SQLAlchemyJSON
+
+            table = Table(table_name, MetaData(), autoload_with=self.manager.engine)
+            records = df.astype(object).where(pd.notnull(df), None).to_dict(orient='records')
+
+            for record in records:
+                for column_name, value in record.items():
+                    column = table.columns.get(column_name)
+                    if column is None or value is None:
+                        continue
+
+                    if isinstance(column.type, (SQLAlchemyJSON, JSONB)) and isinstance(value, str):
+                        try:
+                            record[column_name] = json.loads(value)
+                        except json.JSONDecodeError:
+                            pass
+                    elif isinstance(column.type, DateTime) and isinstance(value, str):
+                        record[column_name] = pd.to_datetime(value).to_pydatetime()
+
+            chunk_size = 500
+            with self.manager.engine.begin() as conn:
+                for i in range(0, len(records), chunk_size):
+                    conn.execute(table.insert(), records[i:i + chunk_size])
+
+            print(f"✅ Inserted {len(records)} records into {table_name} using SQLAlchemy Core")
+            return True
+
         except Exception as e:
             import traceback
-            print(f"❌ Failed to insert DataFrame (unexpected): {str(e)}")
+            print(f"❌ Failed to insert DataFrame: {str(e)}")
             print(traceback.format_exc())
             return False
     
