@@ -560,6 +560,8 @@ async def login(request: LoginRequest, req: Request):
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=result.get('message', 'Login failed')
             )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
