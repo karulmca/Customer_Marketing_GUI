@@ -17,6 +17,7 @@ import {
   TableBody,
   TableCell,
   TableHead,
+  TablePagination,
   TableRow,
   Dialog,
   DialogTitle,
@@ -139,6 +140,8 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
   const [activeTab, setActiveTab] = useState(0);
 
   // Data Management States
+  const [managementPage, setManagementPage] = useState(0);
+  const [managementRowsPerPage, setManagementRowsPerPage] = useState(10);
   const [viewingData, setViewingData] = useState(null);
   const [showViewDataDialog, setShowViewDataDialog] = useState(false);
   const [editingData, setEditingData] = useState(null);
@@ -1009,6 +1012,13 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
     setEditingUser({ username: '', email: '', password: '', role: 'user' });
     setShowEditDialog(true);
   };
+
+  const managementPageCount = Math.max(1, Math.ceil(uploadedFiles.length / managementRowsPerPage));
+  const visibleManagementPage = Math.min(managementPage, managementPageCount - 1);
+  const visibleUploadedFiles = uploadedFiles.slice(
+    visibleManagementPage * managementRowsPerPage,
+    (visibleManagementPage + 1) * managementRowsPerPage
+  );
 
   return (
     <Box sx={{ 
@@ -2196,7 +2206,7 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
                             </TableRow>
                           </TableHead>
                           <TableBody>
-                            {uploadedFiles.map((file) => (
+                            {visibleUploadedFiles.map((file) => (
                               <TableRow key={file.id} hover sx={{ '&:hover': { backgroundColor: 'grey.25' } }}>
                                 <TableCell padding="checkbox">
                                   <Checkbox
@@ -2388,6 +2398,19 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
                         </TableBody>
                       </Table>
                     </Box>
+                    <TablePagination
+                      component="div"
+                      count={uploadedFiles.length}
+                      page={visibleManagementPage}
+                      onPageChange={(_, page) => setManagementPage(page)}
+                      rowsPerPage={managementRowsPerPage}
+                      onRowsPerPageChange={(event) => {
+                        setManagementRowsPerPage(parseInt(event.target.value, 10));
+                        setManagementPage(0);
+                      }}
+                      rowsPerPageOptions={[5, 10, 25, 50]}
+                      sx={{ borderTop: 1, borderColor: 'divider' }}
+                    />
                     </>
                   ) : (
                     <Box sx={{ textAlign: 'center', py: 6 }}>
