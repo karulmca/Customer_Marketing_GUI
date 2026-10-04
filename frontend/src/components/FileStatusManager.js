@@ -10,6 +10,7 @@ import {
   TableCell,
   TableContainer,
   TableHead,
+  TablePagination,
   TableRow,
   Paper,
   Select,
@@ -49,6 +50,8 @@ const FileStatusManager = ({ token, sessionId }) => {
   const [newStatus, setNewStatus] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
   const [confirmDialog, setConfirmDialog] = useState({ open: false, fileId: null, status: null });
 
@@ -166,6 +169,7 @@ const FileStatusManager = ({ token, sessionId }) => {
       (file.uploaded_by && file.uploaded_by.toLowerCase().includes(searchTerm.toLowerCase()));
     return matchesStatus && matchesSearch;
   });
+  const visibleFiles = filteredFiles.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
 
   return (
     <Box sx={{ p: 3 }}>
@@ -192,7 +196,10 @@ const FileStatusManager = ({ token, sessionId }) => {
                 fullWidth
                 placeholder="Search by file name or user..."
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                onChange={(e) => {
+                  setSearchTerm(e.target.value);
+                  setPage(0);
+                }}
                 InputProps={{
                   startAdornment: <SearchIcon sx={{ mr: 1, color: 'action.active' }} />
                 }}
@@ -204,7 +211,10 @@ const FileStatusManager = ({ token, sessionId }) => {
                 <Select
                   value={filterStatus}
                   label="Filter by Status"
-                  onChange={(e) => setFilterStatus(e.target.value)}
+                  onChange={(e) => {
+                    setFilterStatus(e.target.value);
+                    setPage(0);
+                  }}
                   startAdornment={<FilterIcon sx={{ mr: 1, color: 'action.active' }} />}
                 >
                   <MenuItem value="all">All Statuses</MenuItem>
@@ -239,7 +249,7 @@ const FileStatusManager = ({ token, sessionId }) => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {filteredFiles.map((file) => (
+                  {visibleFiles.map((file) => (
                     <TableRow key={file.id} hover>
                       <TableCell>
                         <Tooltip title={file.file_name}>
@@ -312,6 +322,22 @@ const FileStatusManager = ({ token, sessionId }) => {
                 </TableBody>
               </Table>
             </TableContainer>
+          )}
+
+          {!loading && filteredFiles.length > 0 && (
+            <TablePagination
+              component="div"
+              count={filteredFiles.length}
+              page={Math.min(page, Math.max(0, Math.ceil(filteredFiles.length / rowsPerPage) - 1))}
+              onPageChange={(_, nextPage) => setPage(nextPage)}
+              rowsPerPage={rowsPerPage}
+              onRowsPerPageChange={(event) => {
+                setRowsPerPage(parseInt(event.target.value, 10));
+                setPage(0);
+              }}
+              rowsPerPageOptions={[5, 10, 25, 50]}
+              sx={{ borderTop: 1, borderColor: 'divider' }}
+            />
           )}
 
           {/* Summary */}
