@@ -68,11 +68,13 @@ import {
   DataUsage as DataIcon,
   Home as HomeIcon,
   TableChart as TableIcon,
-  Settings as SettingsIcon
+  Settings as SettingsIcon,
+  AutoAwesome as AssistantIcon
 } from '@mui/icons-material';
 import { useDropzone } from 'react-dropzone';
 import { FileService, DatabaseService } from '../services/AuthService';
 import FileStatusManager from './FileStatusManager';
+import CompanyAssistant from './CompanyAssistant';
 
 // Custom TabPanel component for tab content
 function CustomTabPanel(props) {
@@ -1589,6 +1591,12 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
               {...a11yProps(2)}
               sx={{ minHeight: 64 }}
             />
+            <Tab
+              icon={<AssistantIcon />}
+              label="Company AI"
+              {...a11yProps(3)}
+              sx={{ minHeight: 64 }}
+            />
           </Tabs>
         </Box>
 
@@ -2439,6 +2447,10 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
         {/* Tab 3: File Status Manager */}
         <CustomTabPanel value={activeTab} index={2}>
           <FileStatusManager sessionId={sessionId} token={sessionId} />
+        </CustomTabPanel>
+
+        <CustomTabPanel value={activeTab} index={3}>
+          <CompanyAssistant sessionId={sessionId} />
         </CustomTabPanel>
 
       </Box>

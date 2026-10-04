@@ -9,8 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, Field
+from typing import Optional, List, Dict, Any, Literal
 
 import sys
 import json
@@ -489,6 +489,18 @@ class UploadedFilesResponse(BaseModel):
 
 class DownloadMultipleRequest(BaseModel):
     file_ids: List[str]
+
+class AssistantHistoryTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=4000)
+
+class AssistantChatRequest(BaseModel):
+    session_id: str
+    message: str = Field(min_length=1, max_length=4000)
+    history: List[AssistantHistoryTurn] = Field(default_factory=list, max_length=24)
+
+class AssistantIndexRequest(BaseModel):
+    session_id: str
 
 # Authentication endpoints
 @app.post("/api/auth/login")
@@ -2474,6 +2486,79 @@ async def upload_and_process_file(file: UploadFile = File(...), session_id: str 
     except Exception as e:
         logger.error(f"Failed to get processing status: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get processing status: {str(e)}")
+
+def _assistant_user(session_id: str):
+    session_data = verify_session(session_id)
+    if not session_data:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired session. Please login again."
+        )
+    return session_data.get("user_info", {})
+
+
+@app.get("/api/assistant/status")
+def assistant_index_status(session_id: str):
+    from backend_api.services.ai_assistant import get_index_status
+
+    try:
+        return get_index_status(_assistant_user(session_id))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Assistant index status failed: {e}")
+        raise HTTPException(status_code=503, detail="Assistant status is unavailable")
+
+
+@app.post("/api/assistant/index")
+def assistant_index(request: AssistantIndexRequest):
+    from backend_api.services.ai_assistant import index_user_companies
+
+    user_info = _assistant_user(request.session_id)
+    try:
+        return index_user_companies(user_info)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.exception("Assistant indexing failed")
+        raise HTTPException(status_code=502, detail="Could not index company records with OpenAI")
+
+
+@app.delete("/api/assistant/index")
+def assistant_delete_index(session_id: str):
+    from backend_api.services.ai_assistant import delete_user_index
+
+    try:
+        return delete_user_index(_assistant_user(session_id))
+    except HTTPException:
+        raise
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.exception("Assistant index deletion failed")
+        raise HTTPException(status_code=502, detail="Could not delete the OpenAI company index")
+
+
+@app.post("/api/assistant/chat")
+def assistant_chat(request: AssistantChatRequest):
+    from backend_api.services.ai_assistant import run_assistant
+
+    user_info = _assistant_user(request.session_id)
+    try:
+        history = [turn.model_dump() for turn in request.history]
+        return run_assistant(user_info, request.message.strip(), history)
+    except HTTPException:
+        raise
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.exception("Assistant chat failed")
+        raise HTTPException(status_code=502, detail="The assistant request failed; check backend logs")
+
 
 @app.get("/api/files/uploads")
 async def get_uploaded_files(session_id: str):

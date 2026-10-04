@@ -219,6 +219,32 @@ export const FileService = {
   }
 };
 
+export const AssistantService = {
+  async getStatus(sessionId) {
+    const response = await api.get('/assistant/status', { params: { session_id: sessionId } });
+    return response.data;
+  },
+
+  async indexCompanies(sessionId) {
+    const response = await api.post('/assistant/index', { session_id: sessionId }, { timeout: 300000 });
+    return response.data;
+  },
+
+  async deleteIndex(sessionId) {
+    const response = await api.delete('/assistant/index', { params: { session_id: sessionId } });
+    return response.data;
+  },
+
+  async chat(sessionId, message, history) {
+    const response = await api.post('/assistant/chat', {
+      session_id: sessionId,
+      message,
+      history
+    }, { timeout: 120000 });
+    return response.data;
+  }
+};
+
 export const DatabaseService = {
   async getStatus(sessionId) {
     try {
