@@ -153,6 +153,7 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
   // Multi-file Download States
   const [selectedFiles, setSelectedFiles] = useState(new Set());
   const [downloadingMultiple, setDownloadingMultiple] = useState(false);
+  const [deletingMultiple, setDeletingMultiple] = useState(false);
 
   // Last Processed File State
   const [lastProcessedFile, setLastProcessedFile] = useState(null);
@@ -832,6 +833,45 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
       setError(`Failed to download files: ${error.message}`);
     } finally {
       setDownloadingMultiple(false);
+    }
+  };
+
+  const handleBulkDelete = () => {
+    if (selectedFiles.size === 0) {
+      return;
+    }
+
+    setConfirmTitle('Confirm Bulk Deletion');
+    setConfirmMessage(`Delete ${selectedFiles.size} selected files and all associated data? This action cannot be undone.`);
+    setConfirmAction(() => executeBulkDelete);
+    setShowConfirmDialog(true);
+  };
+
+  const executeBulkDelete = async () => {
+    const fileIds = Array.from(selectedFiles);
+    const failedIds = [];
+    let deletedCount = 0;
+
+    setDeletingMultiple(true);
+    setError('');
+
+    for (const fileId of fileIds) {
+      try {
+        await FileService.deleteFile(sessionId, fileId);
+        deletedCount += 1;
+      } catch (error) {
+        failedIds.push(fileId);
+      }
+    }
+
+    setSelectedFiles(new Set(failedIds));
+    await loadUploadedFiles();
+    setDeletingMultiple(false);
+
+    if (failedIds.length > 0) {
+      setError(`Deleted ${deletedCount} of ${fileIds.length} files. ${failedIds.length} could not be deleted; failed files remain selected.`);
+    } else {
+      setSuccess(`${deletedCount} selected files deleted successfully.`);
     }
   };
 
@@ -2111,6 +2151,15 @@ const FileUploadDashboard = ({ sessionId, userInfo, onLogout }) => {
                           {downloadingMultiple 
                             ? 'Downloading...' 
                             : `Download Selected (${selectedFiles.size})`}
+                        </Button>
+                        <Button
+                          variant="outlined"
+                          color="error"
+                          startIcon={<DeleteIcon />}
+                          onClick={handleBulkDelete}
+                          disabled={selectedFiles.size === 0 || deletingMultiple || downloadingMultiple}
+                        >
+                          {deletingMultiple ? 'Deleting...' : `Delete Selected (${selectedFiles.size})`}
                         </Button>
                         {selectedFiles.size > 0 && (
                           <Button

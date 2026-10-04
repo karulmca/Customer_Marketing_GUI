@@ -117,8 +117,9 @@ logger.info(f"🔧 Environment: {environment}")
 
 # Mount static files from React build
 static_dir = os.path.join(parent_dir, "frontend", "build")
-if os.path.exists(static_dir):
-    app.mount("/static", StaticFiles(directory=os.path.join(static_dir, "static")), name="static")
+static_assets_dir = os.path.join(static_dir, "static")
+if os.path.isdir(static_assets_dir):
+    app.mount("/static", StaticFiles(directory=static_assets_dir), name="static")
 
 # Security
 security = HTTPBearer()
